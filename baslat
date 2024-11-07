@@ -1,0 +1,10 @@
+#!bin/bash
+
+
+git pull
+
+
+# sudo find /home/yordam/balor -name "*.pyc" -delete
+# sudo find /home/yordam/balor -name "__pycache__" -delete
+
+sudo /home/jetson/miniconda3/envs/gupur/bin/python gui.py
