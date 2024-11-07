@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import re
 import shutil
 import signal
 import sys 
@@ -30,11 +31,28 @@ PATCH_SETTINGS_DEFAULT = {
 }
 
 class PatchCutterGUI:  
-    def __init__(self, master, video_source=None):
-        self.settings_file = 'data/patch_settings.json'
+    def __init__(self, master, video_source=0):
+        self.settings_file = 'data/configs/patch_settings.json'
+        self.screen_size_file = 'data/configs/screen-size.txt'
         self.load_settings(self.settings_file)
         self.master = master
         self.master.title("Embroidery Patch Cutter")
+        try:
+            with open(self.screen_size_file, 'r') as f:
+                screen_size = f.read().strip()
+            # Validate screen size
+            if not re.match(r'^\d+x\d+$', screen_size):
+                raise ValueError("Invalid screen size format")
+            width, height = map(int, screen_size.split('x'))
+            if width <= 100 or height <= 100:
+                raise ValueError("Window size too small")
+        except (FileNotFoundError, ValueError):
+            screen_size = "800x600"
+
+        self.right_panel_width = 250   # Fixed width for right panel   
+        self.master.geometry(screen_size)  
+        self.master.minsize(800, 600)
+            
         self._is_running = True
         self.calibration_mode = False
 
@@ -44,52 +62,46 @@ class PatchCutterGUI:
         
         self.show_detected_pattern = False
         self.detected_contour = None
-
         self.threshold_timer = None
+        
                             
         self.cutter = PatchCutter()  
-        # Create main layout
         self.create_main_layout()
                 
         os.makedirs('data', exist_ok=True)
         os.makedirs('checkpoints', exist_ok=True)
-        
-        self.master.geometry("1280x720")
-        self.master.minsize(800, 600)
-        
+               
         # Initialize camera in GUI only
         self.video_source = video_source
         self.init_camera()
         self.current_image_rgb = None
-
         
-        # Start camera feed
-        """ if hasattr(self, 'cap') and self.cap.isOpened():
-            self.update_camera_feed()
-            # Start camera feed """
-            
-        # Start camera feed
-        if hasattr(self, 'current_frame'):
-            self.update_camera_feed()
+        # Start camera feed if available
+        if hasattr(self, 'cap') and self.cap.isOpened():
+            self.update_camera_feed_cam()
             
         self.update_pattern_list()
-        
+            
     def create_main_layout(self):       
-        # Left panel for camera feed - set specific weight
-        self.left_panel = ttk.Frame(self.master)
+    # Create main container frame
+        self.main_container = ttk.Frame(self.master)
+        self.main_container.pack(fill=tk.BOTH, expand=True)
+        
+        # Left panel for camera feed with weight
+        self.left_panel = ttk.Frame(self.main_container)
         self.left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        #self.master.grid_columnconfigure(0, weight=3)  
         
         # Camera Feed
         self.camera_frame = ttk.LabelFrame(self.left_panel, text="Camera Feed")
         self.camera_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        self.camera_canvas = tk.Canvas(self.camera_frame, width=800, height=600)  # Set fixed initial size
+        self.camera_canvas = tk.Canvas(self.camera_frame)
         self.camera_canvas.pack(fill=tk.BOTH, expand=True)
-                
-        # Right panel controls section
-        self.right_panel = ttk.Frame(self.master)
+        
+        # Right panel with fixed width
+        self.right_panel = ttk.Frame(self.main_container, width=250)
         self.right_panel.pack(side=tk.RIGHT, fill=tk.Y, padx=5)
+        self.right_panel.pack_propagate(False)  # Prevent right panel from shrinking
         self.master.grid_columnconfigure(1, weight=1)
         
         # 1. Mask Creation - Horizontal button layout
@@ -210,6 +222,36 @@ class PatchCutterGUI:
         self.master.bind('<r>', self.reset_galvo_offset)   
         
     ### Load pattern image
+    def on_camera_frame_resize(self, event):
+        # Get new frame dimensions
+        frame_width = event.width
+        frame_height = event.height
+        
+        if hasattr(self, 'original_width') and hasattr(self, 'original_height'):
+            # Calculate new scaling factors
+            self.scale_factor = min(frame_width/self.original_width, 
+                                frame_height/self.original_height)
+            
+            # Update display dimensions
+            self.display_width = int(self.original_width * self.scale_factor)
+            self.display_height = int(self.original_height * self.scale_factor)
+            
+            # Update padding for centering
+            self.pad_x = max(0, (frame_width - self.display_width) // 2)
+            self.pad_y = max(0, (frame_height - self.display_height) // 2)
+            
+            # Configure canvas size
+            self.camera_canvas.config(width=frame_width, height=frame_height)
+            self.update_window_size()
+            
+    def update_window_size(self):
+        width = self.master.winfo_width()
+        height = self.master.winfo_height()
+        self.update_status(f"Window size: {width}x{height}")
+        if int(width) >100 and int(height) >100:
+            with open(self.screen_size_file, 'w') as f:
+                f.write(f"{width}x{height}")
+
     def load_image(self):
         """Load image file for pattern creation"""
         file_path = filedialog.askopenfilename(
@@ -769,7 +811,7 @@ class PatchCutterGUI:
         return image.resize(new_size, Image.Resampling.LANCZOS)  
 
 
-    def init_camera(self):
+    def init_cameraX(self):
         # Load original image
         self.original_frame = cv2.imread('data/feed_img/p5.jpg')
         if self.original_frame is None:
@@ -803,8 +845,50 @@ class PatchCutterGUI:
         self.current_frame = cv2.resize(self.original_frame, 
                                     (self.display_width, self.display_height))
         return True
+    
+    def init_camera(self):
+        # Try different camera indices
+        for cam_index in range(2):  # Try camera 0 and 1
+            self.cap = cv2.VideoCapture(cam_index)
+            if self.cap.isOpened():
+                # Camera successfully opened
+                self.video_source = cam_index
+                break
+        
+        if not self.cap.isOpened():
+            self.update_status("No camera found. Using fallback mode.")
+            return False
+        
+        # Set camera properties
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)  # Lower resolution for better compatibility
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        
+        # Get actual dimensions (may differ from requested)
+        self.original_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.original_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        # Set canvas size
+        self.canvas_width = 800
+        self.canvas_height = 600
+        self.camera_canvas.config(width=self.canvas_width, height=self.canvas_height)
+        
+        # Calculate scaling factors
+        self.scale_factor = min(self.canvas_width/self.original_width, 
+                            self.canvas_height/self.original_height)
+        
+        # Calculate display dimensions
+        self.display_width = int(self.original_width * self.scale_factor)
+        self.display_height = int(self.original_height * self.scale_factor)
+        
+        # Calculate padding
+        self.pad_x = (self.canvas_width - self.display_width) // 2
+        self.pad_y = (self.canvas_height - self.display_height) // 2
+        
+        return True
 
-
+    
+ 
+    
     def show_frame_on_canvas(self, frame, canvas):
         if frame is None:
             return
@@ -903,7 +987,7 @@ class PatchCutterGUI:
             
         
     # Modify the update_camera_feed method
-    def update_camera_feed(self):
+    def update_camera_feed_img(self):
         if hasattr(self, 'current_frame'):
             display_frame = self.current_frame.copy()
             
@@ -918,8 +1002,49 @@ class PatchCutterGUI:
             if self.calibration_mode:
                 self.draw_calibration_target(self.camera_canvas)
                 
-        self.master.after(30, self.update_camera_feed)
+        self.master.after(30, self.update_camera_feed_img)
 
+   
+    def update_camera_feed_cam(self):
+        if not hasattr(self, 'cap') or not self.cap.isOpened():
+            self.update_status("Camera not available")
+            return
+        
+        ret, frame = self.cap.read()
+        if ret:
+            # Convert BGR to RGB
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # Store original frame for processing
+            self.original_frame = frame.copy()
+            
+            # Resize frame for display using current dimensions
+            self.current_frame = cv2.resize(frame, (self.display_width, self.display_height))
+            
+            # Draw detected patterns if any
+            if self.show_detected_pattern and hasattr(self, 'detected_contours'):
+                display_frame = self.current_frame.copy()
+                for contour in self.detected_contours:
+                    cv2.drawContours(display_frame, [contour], -1, (0, 255, 0), 2)
+                self.current_frame = display_frame
+            
+            # Convert to PhotoImage
+            image = Image.fromarray(self.current_frame)
+            self.photo = ImageTk.PhotoImage(image=image)
+            
+            # Update canvas with centered image
+            self.camera_canvas.delete("all")
+            self.camera_canvas.create_image(self.pad_x, self.pad_y, 
+                                        image=self.photo, anchor='nw')
+            
+            # Draw calibration target if needed
+            if self.calibration_mode:
+                self.draw_calibration_target(self.camera_canvas)
+        
+        # Schedule next update
+        self.master.after(30, self.update_camera_feed_cam)
+
+    
     def load_settings(self, setting_file ):
         # Load settings from file if cutter is not initialized
         self.settings = PATCH_SETTINGS_DEFAULT.copy()
