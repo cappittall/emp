@@ -10,25 +10,12 @@ import time
 import tkinter as tk
 
 from tkinter import ttk, filedialog, messagebox, simpledialog
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from PIL import Image, ImageTk
 import cv2
 from matplotlib import pyplot as plt
 import numpy as np
+from constant import PATCH_SETTINGS_DEFAULT
 from patch_cutter import PatchCutter
-
-# 
-PATCH_SETTINGS_DEFAULT = {
-    'sam_confidence': 0.7,        # SAM2 confidence threshold
-    'stability_score': 0.92,      # SAM2 stability score
-    'min_patch_area': 25.0,       # Minimum patch area
-    'travel_speed': 5000,
-    'cut_speed': 5000,
-    'laser_power': 50,
-    'frequency': 100,
-    'laser_on_delay': 1,
-    'laser_off_delay': 1
-}
 
 class PatchCutterGUI:  
     def __init__(self, master, video_source=0):
@@ -153,15 +140,20 @@ class PatchCutterGUI:
 
 
         # 4. Live Detection
-        """Create detection panel with threshold slider"""
         detection_frame = ttk.LabelFrame(self.right_panel, text="4. Live Detection")
         detection_frame.pack(fill=tk.X, padx=5, pady=5)
-        
-        # Add threshold slider
+
+        # Threshold slider with value
+        threshold_frame = ttk.Frame(detection_frame)
+        threshold_frame.pack(fill=tk.X, padx=5, pady=2)
+
+        threshold_label = ttk.Label(threshold_frame, text="Detection Threshold:")
+        threshold_label.pack(side=tk.LEFT)
+
         self.threshold_var = tk.DoubleVar(value=0.8)
-        threshold_label = ttk.Label(detection_frame, text="Detection Threshold:")
-        threshold_label.pack(fill=tk.X, padx=5, pady=2)
-        
+        self.threshold_value_label = ttk.Label(threshold_frame, text="0.8", width=5)
+        self.threshold_value_label.pack(side=tk.RIGHT)
+
         threshold_slider = ttk.Scale(
             detection_frame,
             from_=0.1,
@@ -171,10 +163,28 @@ class PatchCutterGUI:
             command=self.on_threshold_change
         )
         threshold_slider.pack(fill=tk.X, padx=5, pady=2)
-        
-        # Add threshold value display
-        self.threshold_value_label = ttk.Label(detection_frame, text="0.8")
-        self.threshold_value_label.pack(fill=tk.X, padx=5, pady=2)
+
+        # Offset slider with value
+        offset_frame = ttk.Frame(detection_frame)
+        offset_frame.pack(fill=tk.X, padx=5, pady=2)
+
+        offset_label = ttk.Label(offset_frame, text="Cutting Offset (mm):")
+        offset_label.pack(side=tk.LEFT)
+
+        self.offset_var = tk.DoubleVar(value=0.0)
+        self.offset_value_label = ttk.Label(offset_frame, text="0.0", width=5)
+        self.offset_value_label.pack(side=tk.RIGHT)
+
+        offset_slider = ttk.Scale(
+            detection_frame,
+            from_=-5.0,
+            to=5.0,
+            orient=tk.HORIZONTAL,
+            variable=self.offset_var,
+            command=self.on_offset_change
+        )
+        offset_slider.pack(fill=tk.X, padx=5, pady=2)
+
         
         # 5. Process Controls
         self.process_frame = ttk.LabelFrame(self.right_panel, text="5. Process Controls")
@@ -220,6 +230,52 @@ class PatchCutterGUI:
         self.master.bind('<a>', lambda event: self.adjust_galvo_offset(-1, 0))
         self.master.bind('<d>', lambda event: self.adjust_galvo_offset(1, 0))
         self.master.bind('<r>', self.reset_galvo_offset)   
+        
+    # OFFSET CALIBRATION FOR CUTTING
+    def on_offset_change(self, event):
+        """Handle offset slider changes"""
+        value = self.offset_var.get()
+        self.offset_value_label.config(text=f"{value:.1f} mm")
+        
+        # Update contours with new offset if pattern is detected
+        if hasattr(self, 'detected_contours') and self.detected_contours:
+            self.apply_contour_offset()
+            
+    def apply_contour_offset(self):
+        """Apply offset to detected contours"""
+        if not hasattr(self, 'original_contours'):
+            # Store original contours first time
+            self.original_contours = [cont.copy() for cont in self.detected_contours]
+        
+        offset_mm = self.offset_var.get()
+        # Convert mm to pixels using calibration ratio
+        offset_pixels = offset_mm * (self.cutter.pixel_cm_ratio / 10)  # divide by 10 to convert cm to mm
+        
+        self.detected_contours = []
+        for original_contour in self.original_contours:
+            # Calculate contour center
+            M = cv2.moments(original_contour)
+            if M["m00"] != 0:
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
+                
+                # Calculate offset vectors for each point
+                offset_contour = original_contour.copy()
+                for point in offset_contour:
+                    # Get vector from center to point
+                    dx = point[0][0] - cx
+                    dy = point[0][1] - cy
+                    # Calculate distance
+                    distance = np.sqrt(dx*dx + dy*dy)
+                    if distance > 0:
+                        # Normalize and apply offset
+                        dx = dx/distance * offset_pixels
+                        dy = dy/distance * offset_pixels
+                        # Apply offset
+                        point[0][0] = int(point[0][0] + dx)
+                        point[0][1] = int(point[0][1] + dy)
+                
+                self.detected_contours.append(offset_contour)
         
     ### Load pattern image
     def on_camera_frame_resize(self, event):
@@ -562,14 +618,14 @@ class PatchCutterGUI:
         
         return [matches[i] for i in keep]
             
-    def on_pattern_select(self, event):
+    def on_pattern_selectX(self, event):
         """Updated to handle multiple pattern instances with image display"""
         selection = self.pattern_list.curselection()
         if not selection:
             return
             
         pattern_id = self.pattern_list.get(selection[0])
-        pattern_file = os.path.join('data', 'patterns', f'{pattern_id}.json')
+        pattern_file = os.path.join('data', 'patterns', f'{pattern_id}.json')       
         
         try:
             with open(pattern_file, 'r') as f:
@@ -591,12 +647,15 @@ class PatchCutterGUI:
                 return
             
             self.detected_contours = []
+            self.original_contours = []  
             for position in positions:
                 contour_points = np.array(pattern_data['patch']['points'])
                 contour_points = contour_points * position['scale']
                 contour_points[:,:,0] += position['x']
                 contour_points[:,:,1] += position['y']
-                self.detected_contours.append((contour_points * self.scale_factor).astype(np.int32))
+                scaled_contour = (contour_points * self.scale_factor).astype(np.int32)
+                self.detected_contours.append(scaled_contour)
+                self.original_contours.append(scaled_contour.copy())  # Store original
             
             self.show_detected_pattern = True
             
@@ -606,6 +665,70 @@ class PatchCutterGUI:
             self.update_status(f"Error loading pattern: {pattern_id}")
             self.pattern_list.delete(selection[0])
 
+    def on_pattern_select(self, event):
+        """Handle pattern selection without automatic search"""
+        selection = self.pattern_list.curselection()
+        if not selection:
+            return
+            
+        pattern_id = self.pattern_list.get(selection[0])
+        pattern_file = os.path.join('data', 'patterns', f'{pattern_id}.json')
+        
+        try:
+            with open(pattern_file, 'r') as f:
+                pattern_data = json.load(f)
+                
+            # Decode image data if it exists
+            if 'patch_image_encoded' in pattern_data:
+                img_data = base64.b64decode(pattern_data['patch_image_encoded'])
+                nparr = np.frombuffer(img_data, np.uint8)
+                pattern_data['patch_image'] = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                pattern_data['patch_image'] = cv2.cvtColor(pattern_data['patch_image'], cv2.COLOR_BGR2RGB)
+            
+            # Display pattern preview only
+            self.display_pattern(pattern_data)
+            self.update_status(f"Pattern selected: {pattern_id}")
+                
+        except (json.JSONDecodeError, KeyError) as e:
+            self.update_status(f"Error loading pattern: {pattern_id}")
+            self.pattern_list.delete(selection[0])
+            
+    def search_selected_pattern(self):
+        """Trigger pattern search on button click"""
+        selection = self.pattern_list.curselection()
+        if not selection:
+            self.update_status("Please select a pattern first")
+            return
+            
+        pattern_id = self.pattern_list.get(selection[0])
+        pattern_file = os.path.join('data', 'patterns', f'{pattern_id}.json')
+        
+        try:
+            with open(pattern_file, 'r') as f:
+                pattern_data = json.load(f)
+            
+            positions = self.detect_pattern_position(pattern_data)
+            if positions:
+                self.detected_contours = []
+                self.original_contours = []
+                
+                for position in positions:
+                    contour_points = np.array(pattern_data['patch']['points'])
+                    contour_points = contour_points * position['scale']
+                    contour_points[:,:,0] += position['x']
+                    contour_points[:,:,1] += position['y']
+                    scaled_contour = (contour_points * self.scale_factor).astype(np.int32)
+                    self.detected_contours.append(scaled_contour)
+                    self.original_contours.append(scaled_contour.copy())
+                
+                self.show_detected_pattern = True
+                self.update_status(f"Found {len(positions)} instances of pattern: {pattern_id}")
+            else:
+                self.show_detected_pattern = False
+                self.update_status(f"No matches found for pattern: {pattern_id}")
+                
+        except Exception as e:
+            self.update_status(f"Search failed: {str(e)}")
 
     def display_pattern(self, pattern_data):
         """Enhanced pattern display in the pattern preview window"""
@@ -658,8 +781,9 @@ class PatchCutterGUI:
                 command=self.rename_pattern).pack(side=tk.LEFT, padx=2)
         ttk.Button(button_frame, text="Delete", 
                 command=self.delete_pattern).pack(side=tk.LEFT, padx=2)
-        ttk.Button(button_frame, text="Export", 
-                    command=self.export_pattern).pack(side=tk.LEFT, padx=2)
+        ttk.Button(button_frame, text="Search", 
+                command=self.search_selected_pattern).pack(side=tk.LEFT, padx=2)
+
 
 
     def rename_pattern(self):
