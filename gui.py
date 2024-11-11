@@ -51,6 +51,7 @@ class PatchCutterGUI:
         self.detected_contour = None
         self.threshold_timer = None
         self.offset_timer = None
+        self.loading_label = None
         
                             
         self.cutter = PatchCutter()  
@@ -66,7 +67,7 @@ class PatchCutterGUI:
         
         # Start camera feed if available
         if hasattr(self, 'cap') and self.cap.isOpened():
-            self.update_camera_feed_cam()
+            self.update_camera_feed()
             
         self.update_pattern_list()
             
@@ -232,6 +233,20 @@ class PatchCutterGUI:
         self.master.bind('<d>', lambda event: self.adjust_galvo_offset(1, 0))
         self.master.bind('<r>', self.reset_galvo_offset)   
         
+    def show_loading(self):
+        """Show loading indicator"""
+        if not self.loading_label:
+            self.loading_label = ttk.Label(self.camera_canvas, text="Searching...", 
+                                        background='black', foreground='white')
+        self.loading_label.place(relx=0.5, rely=0.5, anchor='center')
+        self.master.update()
+
+    def hide_loading(self):
+        """Hide loading indicator"""
+        if self.loading_label:
+            self.loading_label.place_forget()
+        self.master.update()
+        
 
     def on_offset_change(self, event):
         """Handle offset slider changes"""
@@ -243,12 +258,7 @@ class PatchCutterGUI:
         
         # Apply offset to detected contours if they exist
         if hasattr(self, 'detected_contours') and self.detected_contours:
-            self.threshold_timer = self.master.after(150, self.apply_contour_offset)
-            
-        
-    
-        
-        
+            self.offset_timer = self.master.after(150, self.apply_contour_offset)        
         
     def apply_contour_offset(self):
         """Apply offset to detected contours"""
@@ -614,10 +624,10 @@ class PatchCutterGUI:
         if not selection:
             self.update_status("Please select a pattern first")
             return
-            
+        
         pattern_id = self.pattern_list.get(selection[0])
         pattern_file = os.path.join('data', 'patterns', f'{pattern_id}.json')
-        
+        self.show_loading()
         try:
             with open(pattern_file, 'r') as f:
                 pattern_data = json.load(f)
@@ -644,6 +654,8 @@ class PatchCutterGUI:
                 
         except Exception as e:
             self.update_status(f"Search failed: {str(e)}")
+        finally:
+            self.hide_loading()
 
     def display_pattern(self, pattern_data):
         """Enhanced pattern display in the pattern preview window"""
@@ -853,42 +865,6 @@ class PatchCutterGUI:
         # Use LANCZOS instead of deprecated ANTIALIAS
         return image.resize(new_size, Image.Resampling.LANCZOS)  
 
-
-    def init_cameraX(self):
-        # Load original image
-        self.original_frame = cv2.imread('data/feed_img/p5.jpg')
-        if self.original_frame is None:
-            self.update_status("Test image not found")
-            return False
-        
-        # Convert BGR to RGB immediately after loading
-        self.original_frame = cv2.cvtColor(self.original_frame, cv2.COLOR_BGR2RGB)
-        
-        # Store original dimensions
-        self.original_height, self.original_width = self.original_frame.shape[:2]
-        
-        # Set fixed canvas size
-        self.canvas_width = 800
-        self.canvas_height = 600
-        self.camera_canvas.config(width=self.canvas_width, height=self.canvas_height)
-        
-        # Calculate scaling factors
-        self.scale_factor = min(self.canvas_width/self.original_width, 
-                            self.canvas_height/self.original_height)
-        
-        # Calculate actual display dimensions
-        self.display_width = int(self.original_width * self.scale_factor)
-        self.display_height = int(self.original_height * self.scale_factor)
-        
-        # Calculate padding for centering
-        self.pad_x = (self.canvas_width - self.display_width) // 2
-        self.pad_y = (self.canvas_height - self.display_height) // 2
-        
-        # Create display frame
-        self.current_frame = cv2.resize(self.original_frame, 
-                                    (self.display_width, self.display_height))
-        return True
-    
     def init_camera(self):
         # Try different camera indices
         for cam_index in range(2):  # Try camera 0 and 1
@@ -928,9 +904,6 @@ class PatchCutterGUI:
         self.pad_y = (self.canvas_height - self.display_height) // 2
         
         return True
-
-    
- 
     
     def show_frame_on_canvas(self, frame, canvas):
         if frame is None:
@@ -1027,65 +1000,45 @@ class PatchCutterGUI:
             
         if self.cutter:
             self.cutter.toggle_calibration_mode()
-            
-        
-    # Modify the update_camera_feed method
-    def update_camera_feed_img(self):
-        if hasattr(self, 'current_frame'):
-            display_frame = self.current_frame.copy()
-            
-            # Draw all detected patterns
-            if self.show_detected_pattern and hasattr(self, 'detected_contours'):
-                for contour in self.detected_contours:
-                    cv2.drawContours(display_frame, [contour], -1, (0, 255, 0), 2)
-                    
-            self.show_frame_on_canvas(display_frame, self.camera_canvas)
-            
-            # Draw calibration target when in calibration mode
-            if self.calibration_mode:
-                self.draw_calibration_target(self.camera_canvas)
                 
-        self.master.after(30, self.update_camera_feed_img)
-
-   
-    def update_camera_feed_cam(self):
-        if not hasattr(self, 'cap') or not self.cap.isOpened():
-            self.update_status("Camera not available")
-            return
-        
-        ret, frame = self.cap.read()
-        if ret:
-            # Convert BGR to RGB
+    def update_camera_feed(self, mode='camera'):
+        """
+        Unified camera feed update function
+        mode: 'camera' or 'image'
+        """
+        if mode == 'camera':
+            if not hasattr(self, 'cap') or not self.cap.isOpened():
+                self.update_status("Camera not available")
+                return
+            ret, frame = self.cap.read()
+            if not ret:
+                return
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
-            # Store original frame for processing
             self.original_frame = frame.copy()
-            
-            # Resize frame for display using current dimensions
-            self.current_frame = cv2.resize(frame, (self.display_width, self.display_height))
-            
-            # Draw detected patterns if any
-            if self.show_detected_pattern and hasattr(self, 'detected_contours'):
-                display_frame = self.current_frame.copy()
-                for contour in self.detected_contours:
-                    cv2.drawContours(display_frame, [contour], -1, (0, 255, 0), 2)
-                self.current_frame = display_frame
-            
-            # Convert to PhotoImage
-            image = Image.fromarray(self.current_frame)
-            self.photo = ImageTk.PhotoImage(image=image)
-            
-            # Update canvas with centered image
-            self.camera_canvas.delete("all")
-            self.camera_canvas.create_image(self.pad_x, self.pad_y, 
-                                        image=self.photo, anchor='nw')
-            
-            # Draw calibration target if needed
-            if self.calibration_mode:
-                self.draw_calibration_target(self.camera_canvas)
+        else:
+            frame = self.current_frame.copy()
+        
+        # Common display logic
+        display_frame = cv2.resize(frame, (self.display_width, self.display_height))
+        
+        if self.show_detected_pattern and hasattr(self, 'detected_contours'):
+            for contour in self.detected_contours:
+                cv2.drawContours(display_frame, [contour], -1, (0, 255, 0), 2)
+        
+        # Convert and display
+        image = Image.fromarray(display_frame)
+        photo = ImageTk.PhotoImage(image=image)
+        
+        self.camera_canvas.delete("all")
+        self.camera_canvas.create_image(self.pad_x, self.pad_y, image=photo, anchor='nw')
+        self.camera_canvas._photo = photo
+        
+        if self.calibration_mode:
+            self.draw_calibration_target(self.camera_canvas)
         
         # Schedule next update
-        self.master.after(30, self.update_camera_feed_cam)
+        self.master.after(30, lambda: self.update_camera_feed(mode))
+        
 
     
     def load_settings(self, setting_file ):
