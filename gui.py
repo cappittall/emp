@@ -467,15 +467,16 @@ class PatchCutterGUI:
             for pattern in patterns:
                 self.pattern_list.insert(tk.END, pattern.replace('.json', ''))
         
-        
+                
     def on_threshold_change(self, event):
-        """Debounced threshold change handler"""
+        """Debounced threshold change handler with minimum value"""
         # Cancel previous timer if exists
         if self.threshold_timer:
             self.master.after_cancel(self.threshold_timer)
         
-        # Update displayed value immediately
-        value = self.threshold_var.get()
+        # Set minimum threshold value to prevent freezing
+        value = max(0.1, self.threshold_var.get())  # Enforce minimum threshold
+        self.threshold_var.set(value)  # Update slider position
         self.threshold_value_label.config(text=f"{value:.2f}")
         
         # Schedule new detection after delay
@@ -493,7 +494,7 @@ class PatchCutterGUI:
             
             with open(pattern_file, 'r') as f:
                 pattern_data = json.load(f)
-            
+            self.show_loading()
             positions = self.detect_pattern_position(pattern_data)
             if positions:
                 self.detected_contours = []
@@ -511,6 +512,7 @@ class PatchCutterGUI:
             else:
                 self.show_detected_pattern = False
                 self.update_status(f"Pattern: {pattern_id} | Threshold: {value:.2f} | No matches found")
+            self.hide_loading()
                         
     def detect_pattern_position(self, pattern_data):
         """Pattern detection with dynamic threshold"""
