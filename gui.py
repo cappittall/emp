@@ -50,6 +50,7 @@ class PatchCutterGUI:
         self.show_detected_pattern = False
         self.detected_contour = None
         self.threshold_timer = None
+        self.offset_timer = None
         
                             
         self.cutter = PatchCutter()  
@@ -231,16 +232,24 @@ class PatchCutterGUI:
         self.master.bind('<d>', lambda event: self.adjust_galvo_offset(1, 0))
         self.master.bind('<r>', self.reset_galvo_offset)   
         
-    # OFFSET CALIBRATION FOR CUTTING
+
     def on_offset_change(self, event):
         """Handle offset slider changes"""
+        if self.offset_timer:
+            self.master.after_cancel(self.offset_timer)
+            
         value = self.offset_var.get()
         self.offset_value_label.config(text=f"{value:.1f} mm")
         
-        # Update contours with new offset if pattern is detected
+        # Apply offset to detected contours if they exist
         if hasattr(self, 'detected_contours') and self.detected_contours:
-            self.apply_contour_offset()
+            self.threshold_timer = self.master.after(150, self.apply_contour_offset)
             
+        
+    
+        
+        
+        
     def apply_contour_offset(self):
         """Apply offset to detected contours"""
         if not hasattr(self, 'original_contours'):
@@ -448,40 +457,7 @@ class PatchCutterGUI:
             for pattern in patterns:
                 self.pattern_list.insert(tk.END, pattern.replace('.json', ''))
         
-             
-    def on_threshold_changeX(self, event):
-        """Handle threshold slider changes with enhanced status updates"""
-        value = self.threshold_var.get()
-        self.threshold_value_label.config(text=f"{value:.2f}")
         
-        selection = self.pattern_list.curselection()
-        if selection:
-            pattern_id = self.pattern_list.get(selection[0])
-            pattern_file = os.path.join('data', 'patterns', f'{pattern_id}.json')
-            
-            with open(pattern_file, 'r') as f:
-                pattern_data = json.load(f)
-            
-            positions = self.detect_pattern_position(pattern_data)
-            if positions:
-                self.detected_contours = []
-                for position in positions:
-                    contour_points = np.array(pattern_data['patch']['points'])
-                    contour_points = contour_points * position['scale']
-                    contour_points[:,:,0] += position['x']
-                    contour_points[:,:,1] += position['y']
-                    self.detected_contours.append((contour_points * self.scale_factor).astype(np.int32))
-                
-                self.show_detected_pattern = True
-                
-                # Enhanced status updates
-                avg_confidence = sum(p['confidence'] for p in positions) / len(positions)
-                status_msg = f"Pattern: {pattern_id} | Threshold: {value:.2f} | Found: {len(positions)} | Avg Confidence: {avg_confidence:.2f}"
-                self.update_status(status_msg)
-            else:
-                self.show_detected_pattern = False
-                self.update_status(f"Pattern: {pattern_id} | Threshold: {value:.2f} | No matches found")
-
     def on_threshold_change(self, event):
         """Debounced threshold change handler"""
         # Cancel previous timer if exists
@@ -495,19 +471,6 @@ class PatchCutterGUI:
         # Schedule new detection after delay
         self.threshold_timer = self.master.after(150, self.perform_detection)
 
-
-    def on_threshold_change(self, event):
-        """Debounced threshold change handler"""
-        # Cancel previous timer if exists
-        if self.threshold_timer:
-            self.master.after_cancel(self.threshold_timer)
-        
-        # Update displayed value immediately
-        value = self.threshold_var.get()
-        self.threshold_value_label.config(text=f"{value:.2f}")
-        
-        # Schedule new detection after delay
-        self.threshold_timer = self.master.after(150, self.perform_detection)
 
     def perform_detection(self):
         """Actual detection logic separated from slider event"""
@@ -578,7 +541,6 @@ class PatchCutterGUI:
         
         return self.filter_overlapping_matches(matches)
 
-
     def filter_overlapping_matches(self, matches, overlap_thresh=0.3):
         """Filter overlapping pattern detections"""
         if not matches:
@@ -618,53 +580,6 @@ class PatchCutterGUI:
         
         return [matches[i] for i in keep]
             
-    def on_pattern_selectX(self, event):
-        """Updated to handle multiple pattern instances with image display"""
-        selection = self.pattern_list.curselection()
-        if not selection:
-            return
-            
-        pattern_id = self.pattern_list.get(selection[0])
-        pattern_file = os.path.join('data', 'patterns', f'{pattern_id}.json')       
-        
-        try:
-            with open(pattern_file, 'r') as f:
-                pattern_data = json.load(f)
-            
-            # Decode image data if it exists
-            if 'patch_image_encoded' in pattern_data:
-                img_data = base64.b64decode(pattern_data['patch_image_encoded'])
-                nparr = np.frombuffer(img_data, np.uint8)
-                pattern_data['patch_image'] = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                pattern_data['patch_image'] = cv2.cvtColor(pattern_data['patch_image'], cv2.COLOR_BGR2RGB)
-            
-            self.display_pattern(pattern_data)
-            
-            # Rest of your pattern detection code...
-            positions = self.detect_pattern_position(pattern_data)
-            if not positions:
-                self.update_status(f"No patterns found: {pattern_id}")
-                return
-            
-            self.detected_contours = []
-            self.original_contours = []  
-            for position in positions:
-                contour_points = np.array(pattern_data['patch']['points'])
-                contour_points = contour_points * position['scale']
-                contour_points[:,:,0] += position['x']
-                contour_points[:,:,1] += position['y']
-                scaled_contour = (contour_points * self.scale_factor).astype(np.int32)
-                self.detected_contours.append(scaled_contour)
-                self.original_contours.append(scaled_contour.copy())  # Store original
-            
-            self.show_detected_pattern = True
-            
-            self.update_status(f"Located {len(positions)} instances of pattern: {pattern_id}")
-            
-        except (json.JSONDecodeError, KeyError) as e:
-            self.update_status(f"Error loading pattern: {pattern_id}")
-            self.pattern_list.delete(selection[0])
-
     def on_pattern_select(self, event):
         """Handle pattern selection without automatic search"""
         selection = self.pattern_list.curselection()
@@ -815,18 +730,21 @@ class PatchCutterGUI:
             export_dir = filedialog.askdirectory(title="Export Pattern")
             if export_dir:
                 self.export_pattern_files(pattern_id, export_dir)
+                
     def rename_pattern_files(self, old_id, new_id):
         pattern_dir = os.path.join('data', 'patterns')
         
         # Rename JSON file
         old_json = os.path.join(pattern_dir, f'{old_id}.json')
         new_json = os.path.join(pattern_dir, f'{new_id}.json')
-        os.rename(old_json, new_json)
         
-        # Rename reference image
-        old_img = os.path.join(pattern_dir, f'{old_id}_reference.png')
-        new_img = os.path.join(pattern_dir, f'{new_id}_reference.png')
-        os.rename(old_img, new_img)
+        # Check if new name already exists
+        if os.path.exists(new_json):
+            self.update_status(f"Pattern name {new_id} already exists")
+            return
+        
+        # Rename JSON file
+        os.rename(old_json, new_json)
         
         # Update JSON content
         with open(new_json, 'r') as f:
@@ -836,6 +754,7 @@ class PatchCutterGUI:
             json.dump(data, f, indent=4)
         
         self.update_status(f"Pattern renamed to {new_id}")
+        
 
 
     def delete_pattern_files(self, pattern_id):
