@@ -278,6 +278,12 @@ class PatchCutter:
             self.pixel_cm_ratio = 39.633
             self.y_hex = 44378
             
+    def clamp_galvo_coordinates(self, x, y):
+        # Assuming the valid range is 0-65535 (16-bit)
+        x = max(0, min(x, 65535))
+        y = max(0, min(y, 65535))
+        return x, y  
+    
     def pixel_to_galvo_coordinates(self, x, y):
         # Convert pixel coordinates to cm using the fixed ratio
         cm_x = x / self.pixel_cm_ratio
