@@ -335,7 +335,9 @@ class PatchCutter:
                     
                     # Convert contour points to cutting coordinates
                     for point in contour:
-                        cmds.light(point[0][0], point[0][1], light=True, jump_delay=100)
+                        x_hex, y_hex = self.pixel_to_galvo_coordinates(point[0][0], point[0][1])
+                        
+                        cmds.light(x_hex, y_hex, light=True, jump_delay=100)
                 
                 # Create and execute cutting job
                 job = self.sender.job(tick=tick)
