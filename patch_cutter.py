@@ -350,15 +350,17 @@ class PatchCutter:
                 raise Exception(f"Error cutting pattern {contour_idx}: {str(e)}")
                 
     def cleanup(self):
+        """Cleanup resources safely"""
         self.is_running = False
-
-        if self.sender:
+        
+        if hasattr(self, 'sender') and self.sender:
             try:
-                self.sender.close()
-            except AttributeError:
-                logging.warning("Sender close method not available")
-
-        if self.galvo_connection:
-            self.galvo_connection = False
-
+                if self.galvo_connection:
+                    self.sender.close()
+            except Exception as e:
+                logging.warning(f"Error during sender cleanup: {e}")
+            finally:
+                self.sender = None
+                self.galvo_connection = False
+        
         cv2.destroyAllWindows()

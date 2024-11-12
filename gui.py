@@ -834,12 +834,26 @@ class PatchCutterGUI:
         pattern_id = self.pattern_list.get(selection[0])
         
         try:
+            # Disable button before starting
+            self.cut_button.config(state='disabled')
+            
             # Start cutting process in a separate thread
-            threading.Thread(target=self._execute_cutting, 
-                            args=(self.detected_contours, pattern_id),
-                            daemon=True).start()
+            def cutting_thread():
+                try:
+                    self.cutter.cut_detected_patterns(self.detected_contours, pattern_id)
+                    self.update_status("Cutting completed successfully")
+                except Exception as e:
+                    self.update_status(f"Cutting failed: {str(e)}")
+                finally:
+                    # Re-enable button in main thread
+                    self.master.after(0, lambda: self.cut_button.config(state='normal'))
+            
+            threading.Thread(target=cutting_thread, daemon=True).start()
+            
         except Exception as e:
             self.update_status(f"Cutting failed: {str(e)}")
+            self.cut_button.config(state='normal')
+
 
     def _execute_cutting(self, contours, pattern_id):
         """Handle the cutting execution process"""
@@ -1068,12 +1082,13 @@ class PatchCutterGUI:
         self.status_text.config(state='disabled')
     
     def exit_application(self):
+        """Clean exit handling"""
         self._is_running = False
         
-        # Cancel the connection status timer
+        # Cancel any pending timers
         if self._connection_timer:
             self.master.after_cancel(self._connection_timer)
-            
+        
         # Allow time for threads to cleanup
         time.sleep(0.1)
         
@@ -1084,12 +1099,15 @@ class PatchCutterGUI:
         for widget in self.master.winfo_children():
             if hasattr(widget, '_photo'):
                 widget._photo = None
-                
-        if self.cutter:
-            self.cutter.cleanup()
         
-        # Schedule destruction in main thread
-        self.master.after(100, self._final_cleanup) 
+        try:
+            if self.cutter:
+                self.cutter.cleanup()
+        except Exception as e:
+            print(f"Cleanup error: {e}")
+        finally:
+            # Schedule destruction in main thread
+            self.master.after(100, self._final_cleanup)
         
     
     def _final_cleanup(self):
