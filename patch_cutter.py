@@ -48,6 +48,11 @@ class PatchCutter:
         self.calibration_mode = False
         self.load_calibration()
         
+        self.total_hex_distance = 51391 
+        self.total_cm_distance = 16.3
+        self.cm_per_hex_step = self.total_cm_distance / self.total_hex_distance
+        self.hex_steps_per_cm = self.total_hex_distance / self.total_cm_distance
+        
         self.galvo_connection = False
         self.galvo_control_thread = threading.Thread(target=self.connect_galvo_control)
         self.galvo_control_thread.daemon = True

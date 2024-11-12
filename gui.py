@@ -49,8 +49,11 @@ class PatchCutterGUI:
         
         self.show_detected_pattern = False
         self.detected_contour = None
+        
         self.threshold_timer = None
         self.offset_timer = None
+        self._connection_timer = None
+        
         self.loading_label = None
         
                             
@@ -365,11 +368,12 @@ class PatchCutterGUI:
                 self.cutter.save_pattern(pattern_data)
                 self.update_pattern_list()
                 self.update_status(f"Pattern {pattern_id} created from image")
-
-
-    ### selection drag - drop for background  #########################################  
+                   
     def update_connection_status(self):
-        """Update the connection indicator color based on galvo status"""
+        """Thread-safe connection status update"""
+        if not self._is_running:
+            return
+            
         if self.cutter.galvo_connection:
             self.connection_indicator.create_oval(2, 2, 18, 18, fill='green', outline='darkgreen')
             self.cut_button.config(state='normal')
@@ -377,9 +381,9 @@ class PatchCutterGUI:
             self.connection_indicator.create_oval(2, 2, 18, 18, fill='red', outline='darkred')
             self.cut_button.config(state='disabled')
         
-        # Schedule next update
-        self.master.after(1000, self.update_connection_status)
-                   
+        # Store the after ID for proper cleanup
+        self._connection_timer = self.master.after(1000, self.update_connection_status)
+    
     def start_selection(self):
         """Enhanced selection start with preview update"""
         self.selecting = True
@@ -480,8 +484,7 @@ class PatchCutterGUI:
         self.threshold_value_label.config(text=f"{value:.2f}")
         
         # Schedule new detection after delay
-        self.threshold_timer = self.master.after(150, self.perform_detection)
-
+        self.threshold_timer = self.master.after(150, self.search_selected_pattern)
 
     def perform_detection(self):
         """Actual detection logic separated from slider event"""
@@ -1066,6 +1069,11 @@ class PatchCutterGUI:
     
     def exit_application(self):
         self._is_running = False
+        
+        # Cancel the connection status timer
+        if self._connection_timer:
+            self.master.after_cancel(self._connection_timer)
+            
         # Allow time for threads to cleanup
         time.sleep(0.1)
         
