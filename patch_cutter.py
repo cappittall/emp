@@ -215,7 +215,6 @@ class PatchCutter:
     def save_calibration(self):
         calibration_data = {
             "pixel_cm_ratio": self.pixel_cm_ratio,
-            "y_hex": self.y_hex,
             "galvo_offset_x": self.galvo_offset_x,
             "galvo_offset_y": self.galvo_offset_y
         }
@@ -247,7 +246,8 @@ class PatchCutter:
                 # Save calibration data
                 calibration_data = {
                     "pixel_cm_ratio": self.pixel_cm_ratio,
-                    "calibration_date": time.strftime('%Y-%m-%d %H:%M:%S')
+                    "galvo_offset_x": self.galvo_offset_x, 
+                    "galvo_offset_y": self.galvo_offset_y                   
                 }
                 
                 with open("data/configs/calibration.json", "w") as f:
@@ -265,18 +265,16 @@ class PatchCutter:
             with open(self.calibration_file, 'r') as file:
                 calibration_data = json.load(file)
                 self.pixel_cm_ratio = calibration_data.get('pixel_cm_ratio', 39.633)
-                self.y_hex = calibration_data.get('y_hex', 44378)
                 self.galvo_offset_x = calibration_data.get('galvo_offset_x', -35)
                 self.galvo_offset_y = calibration_data.get('galvo_offset_y', 532)
                 
-            print(f'Loaded calibration: pixel_cm_ratio = {self.pixel_cm_ratio}, y_hex = {self.y_hex}, '
+            print(f'Loaded calibration: pixel_cm_ratio = {self.pixel_cm_ratio},  '
                   f'galvo_offset_x = {self.galvo_offset_x}, galvo_offset_y = {self.galvo_offset_y}')
         except FileNotFoundError:
             print(f"Calibration file {self.calibration_file} not found. Using default values.")
             self.galvo_offset_x = 40
             self.galvo_offset_y = 380
             self.pixel_cm_ratio = 39.633
-            self.y_hex = 44378
             
     def clamp_galvo_coordinates(self, x, y):
         # Assuming the valid range is 0-65535 (16-bit)
