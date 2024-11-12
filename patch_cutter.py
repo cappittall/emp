@@ -58,7 +58,9 @@ class PatchCutter:
         self.galvo_control_thread.daemon = True
         self.galvo_control_thread.start()
         self.lock = threading.Lock()
-        self.stop_event = threading.Event()     
+        self.stop_event = threading.Event()
+        self.hex_offset_x = None
+        self.hex_offset_y = None
                  
     def connect_galvo_control(self):
         max_attempts = 5
@@ -73,6 +75,7 @@ class PatchCutter:
                     self.sender.cor_table = cor_table_data
                 self.sender.open(mock=DEBUG)
                 self.galvo_connection = True
+                self.send_to_top_left()
                 logging.info("Galvo connected successfully")                    
             except Exception as e:
                 attempt += 1
@@ -81,6 +84,9 @@ class PatchCutter:
                 self.sender = None
                 time.sleep(2)
                 
+    def send_to_top_left(self):
+        self.hex_offset_x, self.hex_offset_y = self.pixel_to_galvo_coordinates(self.galvo_offset_x, self.galvo_offset_y)
+        self.sender.set_xy(self.hex_offset_x, self.hex_offset_y)
     def set_background_range(self, bg_analysis):
         """Set background color range from analysis"""
         self.bg_lower = np.array(bg_analysis['range']['lower'])
@@ -300,54 +306,116 @@ class PatchCutter:
 
         return hex_x, hex_y
                     
+    def optimize_cutting_order(self, contours):
+        """Optimize cutting order based on proximity and column-wise strategy"""
+        # Convert contours to their center points for easier sorting
+        centers = []
+        for i, contour in enumerate(contours):
+            M = cv2.moments(contour)
+            if M["m00"] != 0:
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
+                centers.append((cx, cy, i))
+        
+        # Sort by x coordinate first to group into columns
+        column_width = 100  # Adjust based on your pattern spacing
+        columns = {}
+        
+        for center in centers:
+            column_index = center[0] // column_width
+            if column_index not in columns:
+                columns[column_index] = []
+            columns[column_index].append(center)
+        
+        # Process columns left to right, alternating top-to-bottom and bottom-to-top
+        optimized_indices = []
+        for col_idx in sorted(columns.keys()):
+            column_centers = columns[col_idx]
+            if col_idx % 2 == 0:
+                # Sort top to bottom
+                column_centers.sort(key=lambda x: x[1])
+            else:
+                # Sort bottom to top
+                column_centers.sort(key=lambda x: x[1], reverse=True)
+            
+            optimized_indices.extend([center[2] for center in column_centers])
+        
+        # Return reordered contours
+        return [contours[i] for i in optimized_indices]
+
     def cut_detected_patterns(self, contours, pattern_id):
-        """Execute cutting sequence for detected patterns"""
+        """Execute cutting sequence for detected patterns in optimized order"""
         if not self.sender:
             raise RuntimeError("Laser sender not initialized")
+
+        # Get centers and organize into columns
+        pattern_data = []
+        for idx, contour in enumerate(contours):
+            x = contour[0][0][0]
+            y = contour[0][0][1]
+            pattern_data.append((x, y, idx))
         
-        # Sort contours by position (left to right, top to bottom)
-        sorted_contours = sorted(contours, 
-                            key=lambda c: (c[0][0][1], c[0][0][0]))
+        # Group into columns (adjust column_width based on your pattern spacing)
+        column_width = 100
+        columns = {}
+        for x, y, idx in pattern_data:
+            col_idx = x // column_width
+            if col_idx not in columns:
+                columns[col_idx] = []
+            columns[col_idx].append((x, y, idx))
         
-        for contour_idx, contour in enumerate(sorted_contours):
-            try:
-                # Move to starting position without cutting
-                start_point = contour[0][0]
-                self.sender.set_xy(start_point[0], start_point[1])
-                time.sleep(0.1)  # Allow time for movement
+        # Process columns in order with alternating direction
+        optimized_indices = []
+        for col_idx in sorted(columns.keys()):
+            column_patterns = columns[col_idx]
+            if col_idx % 2 == 0:
+                # Top to bottom
+                column_patterns.sort(key=lambda p: p[1])
+            else:
+                # Bottom to top
+                column_patterns.sort(key=lambda p: p[1], reverse=True)
+            optimized_indices.extend([p[2] for p in column_patterns])
+        
+        # Cut patterns in optimized order
+        for idx in optimized_indices:
+            contour = contours[idx]
+            
+            # Move to starting position
+            start_point = contour[0][0]
+            self.sender.set_xy(start_point[0], start_point[1])
+            time.sleep(0.1)
+            
+            # Prepare cutting parameters
+            params = {
+                'travel_speed': self.golvo_settings['travel_speed'],
+                'frequency': self.golvo_settings['frequency'],
+                'power': self.golvo_settings['power'],
+                'cut_speed': self.golvo_settings['cut_speed'],
+                'laser_on_delay': self.golvo_settings['laser_on_delay'],
+                'laser_off_delay': self.golvo_settings['laser_off_delay'],
+                'polygon_delay': self.golvo_settings['polygon_delay'],
+            }
+            
+            # Execute cutting sequence
+            def tick(cmds, loop_index):
+                cmds.clear()
+                cmds.set_mark_settings(**params)
                 
-                
-                # Prepare cutting parameters
-                params = {
-                    'travel_speed': self.golvo_settings['travel_speed'],
-                    'frequency': self.golvo_settings['frequency'],
-                    'power': self.golvo_settings['power'],
-                    'cut_speed': self.golvo_settings['cut_speed'],
-                    'laser_on_delay': self.golvo_settings['laser_on_delay'],
-                    'laser_off_delay': self.golvo_settings['laser_off_delay'],
-                    'polygon_delay': self.golvo_settings['polygon_delay'],
-                }
-                
-                # Execute cutting sequence
-                def tick(cmds, loop_index):
-                    cmds.clear()
-                    cmds.set_mark_settings(**params)
-                    
-                    # Convert contour points to cutting coordinates
-                    for point in contour:
-                        x_hex, y_hex = self.pixel_to_galvo_coordinates(point[0][0], point[0][1])
-                        
-                        cmds.light(x_hex, y_hex, light=True, jump_delay=100)
-                
-                # Create and execute cutting job
-                job = self.sender.job(tick=tick)
-                job.execute(1)
-                
-                # Move to safe position after cutting
-                self.sender.set_xy(0x8000, 0x8000)
-                
-            except Exception as e:
-                raise Exception(f"Error cutting pattern {contour_idx}: {str(e)}")
+                for point in contour:
+                    x, y = point[0]
+                    x_off, y_off = (x + self.hex_offset_x, y + self.hex_offset_y)
+                    x_hex, y_hex = self.pixel_to_galvo_coordinates( x_off, y_off)
+                    cmds.light(x_hex, y_hex, light=True, jump_delay=100)
+            
+            # Create and execute cutting job
+            job = self.sender.job(tick=tick)
+            job.execute(1)
+            
+            # Skip returning to home position between patterns
+            
+        # Move to safe position only after all patterns are cut
+        self.sender.set_xy(self.hex_offset_x, self.hex_offset_y)
+        
                 
     def cleanup(self):
         """Cleanup resources safely"""
