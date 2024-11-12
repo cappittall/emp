@@ -318,12 +318,13 @@ class PatchCutter:
                 self.sender.set_xy(start_point[0], start_point[1])
                 time.sleep(0.1)  # Allow time for movement
                 
+                
                 # Prepare cutting parameters
                 params = {
                     'travel_speed': self.golvo_settings['travel_speed'],
-                    'cut_speed': self.golvo_settings['cut_speed'],
                     'frequency': self.golvo_settings['frequency'],
                     'power': self.golvo_settings['power'],
+                    'cut_speed': self.golvo_settings['cut_speed'],
                     'laser_on_delay': self.golvo_settings['laser_on_delay'],
                     'laser_off_delay': self.golvo_settings['laser_off_delay'],
                     'polygon_delay': self.golvo_settings['polygon_delay'],
@@ -336,7 +337,7 @@ class PatchCutter:
                     
                     # Convert contour points to cutting coordinates
                     for point in contour:
-                        cmds.mark(point[0][0], point[0][1])
+                        cmds.light(point[0][0], point[0][1], light=True, jump_delay=100)
                 
                 # Create and execute cutting job
                 job = self.sender.job(tick=tick)
