@@ -488,7 +488,7 @@ class PatchCutterGUI:
         self.threshold_value_label.config(text=f"{value:.2f}")
         
         # Schedule new detection after delay
-        self.threshold_timer = self.master.after(150, self.search_selected_pattern)
+        self.threshold_timer = self.master.after(1000, self.search_selected_pattern)
 
     def perform_detection(self):
         """Actual detection logic separated from slider event"""
