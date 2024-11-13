@@ -65,13 +65,16 @@ class PatchCutterGUI:
                
         # Initialize camera in GUI only
         self.video_source = video_source
-        self.init_camera()
-        self.current_image_rgb = None
-        
-        # Start camera feed if available
-        if hasattr(self, 'cap') and self.cap.isOpened():
-            self.update_camera_feed()
-            
+        camera_initialized = self.init_camera()
+        if not camera_initialized:
+            # Handle camera initialization failure gracefully
+            self.update_status("Camera initialization failed. Camera-dependent features will be disabled.")
+            # Disable camera-dependent features or set flags accordingly
+        else:
+            # Start camera feed if available
+            if hasattr(self, 'cap') and self.cap.isOpened():
+                self.update_camera_feed()
+        self.current_image_rgb = None            
         self.update_pattern_list()
             
     def create_main_layout(self):       

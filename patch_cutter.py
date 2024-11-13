@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 import os
+import statistics
 import threading
 import time
 import cv2
@@ -59,8 +60,8 @@ class PatchCutter:
         self.galvo_control_thread.start()
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
-        self.hex_offset_x = None
-        self.hex_offset_y = None
+        self.galvo_offset_x_hex = None
+        self.galvo_offset_y_hex = None
                  
     def connect_galvo_control(self):
         max_attempts = 5
@@ -85,8 +86,9 @@ class PatchCutter:
                 time.sleep(2)
                 
     def send_to_top_left(self):
-        self.hex_offset_x, self.hex_offset_y = self.pixel_to_galvo_coordinates(self.galvo_offset_x, self.galvo_offset_y)
-        self.sender.set_xy(self.hex_offset_x, self.hex_offset_y)
+        self.galvo_offset_x_hex, self.galvo_offset_y_hex = self.pixel_to_galvo_coordinates(self.galvo_offset_x, self.galvo_offset_y)
+        self.sender.set_xy(self.galvo_offset_x_hex, self.galvo_offset_y_hex)
+        
     def set_background_range(self, bg_analysis):
         """Set background color range from analysis"""
         self.bg_lower = np.array(bg_analysis['range']['lower'])
@@ -306,42 +308,28 @@ class PatchCutter:
 
         return hex_x, hex_y
                     
-    def optimize_cutting_order(self, contours):
-        """Optimize cutting order based on proximity and column-wise strategy"""
-        # Convert contours to their center points for easier sorting
-        centers = []
-        for i, contour in enumerate(contours):
-            M = cv2.moments(contour)
-            if M["m00"] != 0:
-                cx = int(M["m10"] / M["m00"])
-                cy = int(M["m01"] / M["m00"])
-                centers.append((cx, cy, i))
-        
-        # Sort by x coordinate first to group into columns
-        column_width = 100  # Adjust based on your pattern spacing
-        columns = {}
-        
-        for center in centers:
-            column_index = center[0] // column_width
-            if column_index not in columns:
-                columns[column_index] = []
-            columns[column_index].append(center)
-        
-        # Process columns left to right, alternating top-to-bottom and bottom-to-top
-        optimized_indices = []
-        for col_idx in sorted(columns.keys()):
-            column_centers = columns[col_idx]
-            if col_idx % 2 == 0:
-                # Sort top to bottom
-                column_centers.sort(key=lambda x: x[1])
-            else:
-                # Sort bottom to top
-                column_centers.sort(key=lambda x: x[1], reverse=True)
+    def calculate_column_width(self, pattern_data):
+        """Calculate optimal column width based on pattern distribution"""
+        if len(pattern_data) < 2:
+            return 100  # default value for single pattern
             
-            optimized_indices.extend([center[2] for center in column_centers])
+        # Sort by x coordinate
+        sorted_x = sorted(pattern_data, key=lambda p: p[0])
         
-        # Return reordered contours
-        return [contours[i] for i in optimized_indices]
+        # Calculate distances between adjacent patterns
+        distances = []
+        for i in range(len(sorted_x) - 1):
+            dist = sorted_x[i + 1][0] - sorted_x[i][0]
+            if dist > 10:  # Minimum threshold to avoid noise
+                distances.append(dist)
+        
+        if not distances:
+            return 100  # fallback value
+            
+        # Use median distance as column width
+        column_width = statistics.median(distances)
+        return column_width * 0.8  # Use 80% of median distance for reliable grouping
+
 
     def cut_detected_patterns(self, contours, pattern_id):
         """Execute cutting sequence for detected patterns in optimized order"""
@@ -356,7 +344,7 @@ class PatchCutter:
             pattern_data.append((x, y, idx))
         
         # Group into columns (adjust column_width based on your pattern spacing)
-        column_width = 100
+        column_width = self.calculate_column_width(pattern_data)
         columns = {}
         for x, y, idx in pattern_data:
             col_idx = x // column_width
@@ -403,7 +391,7 @@ class PatchCutter:
                 
                 for point in contour:
                     x, y = point[0]
-                    x_off, y_off = (x + self.hex_offset_x, y + self.hex_offset_y)
+                    x_off, y_off = (x + self.galvo_offset_x, y + self.galvo_offset_y)
                     x_hex, y_hex = self.pixel_to_galvo_coordinates( x_off, y_off)
                     cmds.light(x_hex, y_hex, light=True, jump_delay=100)
             
@@ -414,7 +402,7 @@ class PatchCutter:
             # Skip returning to home position between patterns
             
         # Move to safe position only after all patterns are cut
-        self.sender.set_xy(self.hex_offset_x, self.hex_offset_y)
+        self.sender.set_xy(self.galvo_offset_x_hex, self.galvo_offset_y_hex)
         
                 
     def cleanup(self):
