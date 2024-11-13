@@ -350,29 +350,25 @@ class PatchCutterGUI:
             return
             
         if hasattr(self, 'calibration_contour'):
-            # Initialize point index if not exists
             if not hasattr(self, 'preview_point_index'):
                 self.preview_point_index = 0
                 
-            # Get the contour of first patch
             contour = self.calibration_contour
             current_point = contour[self.preview_point_index][0]
             x, y = current_point
             
-            # Apply galvo offsets and convert to galvo coordinates
             x_off = x + self.cutter.galvo_offset_x
             y_off = y + self.cutter.galvo_offset_y
             x_hex, y_hex = self.cutter.pixel_to_galvo_coordinates(x_off, y_off)
             
-            # Move laser without cutting
             if self.cutter.galvo_connection:
                 self.cutter.sender.set_xy(x_hex, y_hex)
                 
-            # Move to next point in the patch contour
             self.preview_point_index = (self.preview_point_index + 1) % len(contour)
                 
-        # Schedule next preview point
-        self.preview_timer = self.master.after(50, self.preview_cutting_path)
+        # Reduced delay to 5ms for faster movement
+        self.preview_timer = self.master.after(5, self.preview_cutting_path)
+
 
     def adjust_pixel_ratio(self, delta):
         if hasattr(self, 'calibration_active') and self.calibration_active:
