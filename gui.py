@@ -324,7 +324,7 @@ class PatchCutterGUI:
                         point[0][1] = int(point[0][1] + dy)
                 
                 self.detected_contours.append(offset_contour)
-            
+                
     def toggle_calibration(self):
         if not hasattr(self, 'calibration_active'):
             self.calibration_active = False
@@ -333,13 +333,15 @@ class PatchCutterGUI:
         
         if self.calibration_active:
             self.calibrate_button.config(text="Stop Calibration")
-            # Get the first patch contour
-            if hasattr(self, 'detected_contours') and len(self.detected_contours) >= 8:
-                self.calibration_contour = self.detected_contours[0]  # Using first patch
+            # Use first detected contour if available
+            if hasattr(self, 'detected_contours') and len(self.detected_contours) > 0:
+                self.calibration_contour = self.detected_contours[0]
+                # Start laser preview
                 self.preview_cutting_path()
         else:
             self.calibrate_button.config(text="Start Calibration")
             self.cutter.save_calibration()
+            # Stop laser preview
             if hasattr(self, 'preview_timer'):
                 self.master.after_cancel(self.preview_timer)
         
@@ -376,9 +378,11 @@ class PatchCutterGUI:
         if hasattr(self, 'calibration_active') and self.calibration_active:
             self.cutter.pixel_cm_ratio += delta
             self.update_ratio_display()
-            # Refresh pattern display if one is selected
-            if self.pattern_list.curselection():
-                self.search_selected_pattern()
+            # Refresh contour display
+            if hasattr(self, 'calibration_contour'):
+                self.show_detected_pattern = True
+                self.master.update()
+
 
     def update_ratio_display(self):
         if hasattr(self.cutter, 'pixel_cm_ratio'):
