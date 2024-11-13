@@ -63,12 +63,6 @@ class PatchCutter:
         
         self.boundary_walking_event = threading.Event()
         self.boundary_walking_thread = None
-
-        # Initialize calibration variables (replacement ArUco calibration)
-        self.calibration_visualization = None  
-        self.calibration_contour = None        
-        # Step size for adjusting pixel_cm_ratio
-        self.pixel_cm_ratio_step = 1.0
                          
     def connect_galvo_control(self):
         max_attempts = 5
@@ -240,18 +234,7 @@ class PatchCutter:
             hex_x, hex_y = self.pixel_to_galvo_coordinates(self.galvo_offset_x, self.galvo_offset_y)
             self.sender.set_xy(hex_x, hex_y)
             print(f"Galvo offset: X={self.galvo_offset_x}, Y={self.galvo_offset_y}") 
-            
-    def toggle_calibration_mode(self):
-        self.calibration_mode = not self.calibration_mode
-        if self.calibration_mode:
-            print("Calibration mode started.")
-            # Load the first contour for visualization
-            self.load_calibration_contour()
-        else:
-            print("Calibration mode stopped.")
-            # Save the final pixel_cm_ratio to disk
-            self.save_calibration()
-     
+                 
     def save_calibration(self):
         calibration_data = {
             "pixel_cm_ratio": self.pixel_cm_ratio,
@@ -491,61 +474,3 @@ class PatchCutter:
         cv2.destroyAllWindows()
         
         
-        
-""" 
- 
-    # END galvo setting 
-    def increase_pixel_cm_ratio(self):
-        if self.calibration_mode:
-            self.pixel_cm_ratio += self.pixel_cm_ratio_step
-            print(f"pixel_cm_ratio increased to {self.pixel_cm_ratio}")
-            self.update_calibration_visualization()
-
-    def decrease_pixel_cm_ratio(self):
-        if self.calibration_mode and self.pixel_cm_ratio > self.pixel_cm_ratio_step:
-            self.pixel_cm_ratio -= self.pixel_cm_ratio_step
-            print(f"pixel_cm_ratio decreased to {self.pixel_cm_ratio}")
-            self.update_calibration_visualization()
-    
-    # TODO send contours to this function
-    def load_calibration_contour(self):
-        # Assume you have a method to capture a frame and detect contours
-        frame = self.capture_frame()
-        contours = self.detect_contours(frame)
-        if contours:
-            self.calibration_contour = contours[0]
-            self.update_calibration_visualization()
-        else:
-            print("No contours found for calibration visualization.")
-                  
-    def update_calibration_visualization(self):
-        if self.calibration_contour is None:
-            return
-
-        # Capture a new frame for visualization
-        frame = self.capture_frame()
-
-        # Create a copy to draw on
-        visualization = frame.copy()
-
-        # Apply galvo offsets to the contour points
-        adjusted_contour = []
-        for point in self.calibration_contour:
-            x, y = point[0]
-            x_off = x + self.galvo_offset_x
-            y_off = y + self.galvo_offset_y
-            adjusted_contour.append([[x_off, y_off]])
-
-        adjusted_contour = np.array(adjusted_contour, dtype=np.int32)
-
-        # Draw the adjusted contour on the visualization image
-        cv2.drawContours(visualization, [adjusted_contour], -1, (0, 255, 0), 2)
-
-        # Save the visualization image for display
-        self.calibration_visualization = visualization
-
-        # Optionally, display the image here if you're not using a GUI framework
-        # cv2.imshow("Calibration Visualization", self.calibration_visualization)
-        # cv2.waitKey(1)
-        
-"""
