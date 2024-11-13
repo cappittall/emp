@@ -238,6 +238,7 @@ class PatchCutterGUI:
         self.master.bind('<a>', lambda event: self.adjust_galvo_offset(-1, 0))
         self.master.bind('<d>', lambda event: self.adjust_galvo_offset(1, 0))
         self.master.bind('<r>', self.reset_galvo_offset)   
+        self.master.bind('<l>', self.walk_galvo_boundary)   
         
     def show_loading(self):
         """Show loading indicator"""
@@ -1003,7 +1004,16 @@ class PatchCutterGUI:
         if self.cutter and self.cutter.calibration_mode:
             self.cutter.adjust_galvo_offset(dx, dy)
             self.update_status(f"Galvo offset: X={self.cutter.galvo_offset_x}, Y={self.cutter.galvo_offset_y}")
-    
+            
+    def walk_galvo_boundary(self, event=None):
+        if hasattr(self.cutter, 'boundary_walking_event'):
+            if self.cutter.boundary_walking_event.is_set():
+                self.cutter.stop_walk_galvo_boundary()
+                self.update_status("Boundary walking stopped.")
+            else:
+                self.cutter.start_walk_galvo_boundary()
+                self.update_status("Boundary walking started.")
+            
     def reset_galvo_offset(self, event=None):
         if self.cutter and self.cutter.calibration_mode:
             self.cutter.galvo_offset_x = -45

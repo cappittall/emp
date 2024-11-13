@@ -38,14 +38,14 @@ GALVO_SETTINGS_DEFAULT = {
 # import torch
 class PatchCutter:
     
-    def __init__(self, golvo_settings=GALVO_SETTINGS_DEFAULT):
+    def __init__(self, galvo_settings=GALVO_SETTINGS_DEFAULT):
         self.calibration_file = 'data/configs/calibration.json'
         self.is_cutting = False
         self.template_mask = None
         self.settings = {}  # Add settings dictionary
         self.bg_lower = np.array([0, 0, 0])  # Default values
         self.bg_upper = np.array([180, 255, 255])  # Default values
-        self.golvo_settings = golvo_settings
+        self.galvo_settings = galvo_settings
         self.calibration_mode = False
         self.load_calibration()
         
@@ -60,8 +60,9 @@ class PatchCutter:
         self.galvo_control_thread.start()
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
-        self.galvo_offset_x_hex = None
-        self.galvo_offset_y_hex = None
+        
+        self.boundary_walking_event = threading.Event()
+        self.boundary_walking_thread = None
                  
     def connect_galvo_control(self):
         max_attempts = 5
@@ -86,15 +87,37 @@ class PatchCutter:
                 time.sleep(2)
                 
     def send_to_top_left(self):
-        self.galvo_offset_x_hex, self.galvo_offset_y_hex = self.pixel_to_galvo_coordinates(self.galvo_offset_x, self.galvo_offset_y)
-        self.sender.set_xy(self.galvo_offset_x_hex, self.galvo_offset_y_hex)
+        galvo_offset_x_hex, galvo_offset_y_hex = self.pixel_to_galvo_coordinates(self.galvo_offset_x, self.galvo_offset_y)
+        self.sender.set_xy(galvo_offset_x_hex, galvo_offset_y_hex)
         
     def set_background_range(self, bg_analysis):
         """Set background color range from analysis"""
         self.bg_lower = np.array(bg_analysis['range']['lower'])
         self.bg_upper = np.array(bg_analysis['range']['upper'])
             
-        
+    def start_walk_galvo_boundary(self):
+        if self.sender and (self.boundary_walking_thread is None or not self.boundary_walking_thread.is_alive()):
+            self.boundary_walking_event.set()
+            self.boundary_walking_thread = threading.Thread(target=self._walk_galvo_boundary)
+            self.boundary_walking_thread.start()
+
+    def stop_walk_galvo_boundary(self):
+        self.boundary_walking_event.clear()
+        if self.boundary_walking_thread and self.boundary_walking_thread.is_alive():
+            self.boundary_walking_thread.join()
+            self.boundary_walking_thread = None
+
+    def _walk_galvo_boundary(self):
+        while self.boundary_walking_event.is_set():
+            self.sender.set_xy(0, 0)
+            time.sleep(0.01)
+            self.sender.set_xy(65535, 0)
+            time.sleep(0.01)
+            self.sender.set_xy(65535, 65535)
+            time.sleep(0.01)
+            self.sender.set_xy(0, 65535)
+            time.sleep(0.01)
+
     def analyze_background(self, bg_sample):
         """Enhanced background analysis for various colors"""
         hsv_bg = cv2.cvtColor(bg_sample, cv2.COLOR_RGB2HSV)
@@ -330,7 +353,6 @@ class PatchCutter:
         column_width = statistics.median(distances)
         return column_width * 0.8  # Use 80% of median distance for reliable grouping
 
-
     def cut_detected_patterns(self, contours, pattern_id):
         """Execute cutting sequence for detected patterns in optimized order"""
         if not self.sender:
@@ -339,71 +361,109 @@ class PatchCutter:
         # Get centers and organize into columns
         pattern_data = []
         for idx, contour in enumerate(contours):
-            x = contour[0][0][0]
-            y = contour[0][0][1]
-            pattern_data.append((x, y, idx))
-        
-        # Group into columns (adjust column_width based on your pattern spacing)
+            # Calculate the centroid of the contour for better accuracy
+            M = cv2.moments(contour)
+            if M['m00'] != 0:
+                x = int(M['m10'] / M['m00'])
+                y = int(M['m01'] / M['m00'])
+                pattern_data.append((x, y, idx))
+            else:
+                # Fallback to first point if contour is degenerate
+                x = contour[0][0][0]
+                y = contour[0][0][1]
+                pattern_data.append((x, y, idx))
+
+        # Calculate column width based on pattern spacing
         column_width = self.calculate_column_width(pattern_data)
+
+        # Group patterns into columns
         columns = {}
         for x, y, idx in pattern_data:
-            col_idx = x // column_width
+            col_idx = int(x // column_width)
             if col_idx not in columns:
                 columns[col_idx] = []
             columns[col_idx].append((x, y, idx))
-        
-        # Process columns in order with alternating direction
+
+        # Create an optimized list of indices to cut
         optimized_indices = []
-        for col_idx in sorted(columns.keys()):
+        column_indices = sorted(columns.keys())
+        for i, col_idx in enumerate(column_indices):
             column_patterns = columns[col_idx]
-            if col_idx % 2 == 0:
+            # Alternate the direction of processing for each column
+            if i % 2 == 0:
                 # Top to bottom
                 column_patterns.sort(key=lambda p: p[1])
             else:
                 # Bottom to top
                 column_patterns.sort(key=lambda p: p[1], reverse=True)
             optimized_indices.extend([p[2] for p in column_patterns])
-        
+
+        # Debug: Verify that all indices are included
+        print(f"Total contours detected: {len(contours)}")
+        print(f"Optimized indices: {optimized_indices}")
+
+        # Send the laser to the initial offset position before starting
+        self.send_to_top_left()
+        time.sleep(0.1)
+
+        # Cutting parameters
+        params = {
+            'travel_speed': self.galvo_settings['travel_speed'],
+            'frequency': self.galvo_settings['frequency'],
+            'power': self.galvo_settings['power'],
+            'cut_speed': self.galvo_settings['cut_speed'],
+            'laser_on_delay': self.galvo_settings['laser_on_delay'],
+            'laser_off_delay': self.galvo_settings['laser_off_delay'],
+            'polygon_delay': self.galvo_settings['polygon_delay'],
+        }
+
         # Cut patterns in optimized order
         for idx in optimized_indices:
             contour = contours[idx]
-            
-            # Move to starting position
+
+            # Move to starting position of the contour
             start_point = contour[0][0]
-            self.sender.set_xy(start_point[0], start_point[1])
-            time.sleep(0.1)
-            
-            # Prepare cutting parameters
-            params = {
-                'travel_speed': self.golvo_settings['travel_speed'],
-                'frequency': self.golvo_settings['frequency'],
-                'power': self.golvo_settings['power'],
-                'cut_speed': self.golvo_settings['cut_speed'],
-                'laser_on_delay': self.golvo_settings['laser_on_delay'],
-                'laser_off_delay': self.golvo_settings['laser_off_delay'],
-                'polygon_delay': self.golvo_settings['polygon_delay'],
-            }
-            
-            # Execute cutting sequence
+            x, y = start_point
+
+            # Apply galvo offsets
+            x_off = x + self.galvo_offset_x
+            y_off = y + self.galvo_offset_y
+
+            # Convert to galvo coordinates
+            x_hex, y_hex = self.pixel_to_galvo_coordinates(x_off, y_off)
+
+            # Move to the starting position
+            self.sender.set_xy(x_hex, y_hex)
+            time.sleep(0.05)  # Small delay to allow movement
+
+            # Prepare the cutting command sequence
             def tick(cmds, loop_index):
                 cmds.clear()
                 cmds.set_mark_settings(**params)
-                
+
+                # Begin cutting the contour
                 for point in contour:
-                    x, y = point[0]
-                    x_off, y_off = (x + self.galvo_offset_x, y + self.galvo_offset_y)
-                    x_hex, y_hex = self.pixel_to_galvo_coordinates( x_off, y_off)
-                    cmds.light(x_hex, y_hex, light=True, jump_delay=100)
-            
-            # Create and execute cutting job
+                    px, py = point[0]
+
+                    # Apply galvo offsets
+                    px_off = px + self.galvo_offset_x
+                    py_off = py + self.galvo_offset_y
+
+                    # Convert to galvo coordinates
+                    px_hex, py_hex = self.pixel_to_galvo_coordinates(px_off, py_off)
+
+                    # Light command for cutting
+                    cmds.light(px_hex, py_hex, light=True)
+
+            # Create and execute the cutting job
             job = self.sender.job(tick=tick)
             job.execute(1)
-            
-            # Skip returning to home position between patterns
-            
-        # Move to safe position only after all patterns are cut
-        self.sender.set_xy(self.galvo_offset_x_hex, self.galvo_offset_y_hex)
-        
+            time.sleep(0.05)  # Small delay between patterns
+
+        # After all patterns are cut, move to a safe position
+        self.send_to_top_left()
+        time.sleep(0.1)
+  
                 
     def cleanup(self):
         """Cleanup resources safely"""
