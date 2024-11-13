@@ -240,7 +240,7 @@ class PatchCutter:
         if self.calibration_mode:
             print("Calibration mode started.")
             # Load the first contour for visualization
-            self.load_calibration_contour()
+            
         else:
             print("Calibration mode stopped.")
             # Save the final pixel_cm_ratio to disk
