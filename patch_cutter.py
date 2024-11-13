@@ -234,7 +234,18 @@ class PatchCutter:
             hex_x, hex_y = self.pixel_to_galvo_coordinates(self.galvo_offset_x, self.galvo_offset_y)
             self.sender.set_xy(hex_x, hex_y)
             print(f"Galvo offset: X={self.galvo_offset_x}, Y={self.galvo_offset_y}") 
-                 
+            
+    def toggle_calibration_mode(self):
+        self.calibration_mode = not self.calibration_mode
+        if self.calibration_mode:
+            print("Calibration mode started.")
+            # Load the first contour for visualization
+            self.load_calibration_contour()
+        else:
+            print("Calibration mode stopped.")
+            # Save the final pixel_cm_ratio to disk
+            self.save_calibration()
+     
     def save_calibration(self):
         calibration_data = {
             "pixel_cm_ratio": self.pixel_cm_ratio,
@@ -472,5 +483,4 @@ class PatchCutter:
                 self.galvo_connection = False
         
         cv2.destroyAllWindows()
-        
         
