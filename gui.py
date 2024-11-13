@@ -35,8 +35,7 @@ class PatchCutterGUI:
                 raise ValueError("Window size too small")
         except (FileNotFoundError, ValueError):
             screen_size = "800x600"
-
-        self.right_panel_width = 250   # Fixed width for right panel   
+ 
         self.master.geometry(screen_size)  
         self.master.minsize(800, 600)
             
@@ -94,7 +93,7 @@ class PatchCutterGUI:
         self.camera_canvas.pack(fill=tk.BOTH, expand=True)
         
         # Right panel with fixed width
-        self.right_panel = ttk.Frame(self.main_container, width=250)
+        self.right_panel = ttk.Frame(self.main_container, width=400)
         self.right_panel.pack(side=tk.RIGHT, fill=tk.Y, padx=5)
         self.right_panel.pack_propagate(False)  # Prevent right panel from shrinking
         self.master.grid_columnconfigure(1, weight=1)
