@@ -215,6 +215,25 @@ class PatchCutterGUI:
                                                 command=self.aruco_calibrate)
         self.aruco_calibrate_button.pack(side=tk.LEFT, padx=5)
         
+        
+        # Add calibration controls to Process Controls frame
+        calibration_frame = ttk.Frame(self.process_frame)
+        calibration_frame.pack(fill=tk.X, padx=5, pady=2)
+        
+        self.calibrate_button = ttk.Button(calibration_frame, text="Start Calibration", 
+                                        command=self.toggle_calibration)
+        self.calibrate_button.pack(side=tk.LEFT, padx=2)
+        
+        ttk.Button(calibration_frame, text="+", 
+                command=lambda: self.adjust_pixel_ratio(1)).pack(side=tk.LEFT, padx=2)
+        ttk.Button(calibration_frame, text="-", 
+                command=lambda: self.adjust_pixel_ratio(-1)).pack(side=tk.LEFT, padx=2)
+        
+        # Add pixel ratio display label
+        self.ratio_label = ttk.Label(calibration_frame, text="")
+        self.ratio_label.pack(side=tk.LEFT, padx=5)
+        self.update_ratio_display()
+        
         # Start connection status monitoring
         self.update_connection_status()
 
@@ -239,6 +258,9 @@ class PatchCutterGUI:
         self.master.bind('<d>', lambda event: self.adjust_galvo_offset(1, 0))
         self.master.bind('<r>', self.reset_galvo_offset)   
         self.master.bind('<l>', self.walk_galvo_boundary)   
+        
+    
+    
         
     def show_loading(self):
         """Show loading indicator"""
@@ -302,6 +324,66 @@ class PatchCutterGUI:
                         point[0][1] = int(point[0][1] + dy)
                 
                 self.detected_contours.append(offset_contour)
+            
+    def toggle_calibration(self):
+        if not hasattr(self, 'calibration_active'):
+            self.calibration_active = False
+            
+        self.calibration_active = not self.calibration_active
+        
+        if self.calibration_active:
+            self.calibrate_button.config(text="Stop Calibration")
+            # Get the first patch contour
+            if hasattr(self, 'detected_contours') and len(self.detected_contours) >= 8:
+                self.calibration_contour = self.detected_contours[0]  # Using first patch
+                self.preview_cutting_path()
+        else:
+            self.calibrate_button.config(text="Start Calibration")
+            self.cutter.save_calibration()
+            if hasattr(self, 'preview_timer'):
+                self.master.after_cancel(self.preview_timer)
+        
+    def preview_cutting_path(self):
+        if not hasattr(self, 'calibration_active') or not self.calibration_active:
+            return
+            
+        if hasattr(self, 'calibration_contour'):
+            # Initialize point index if not exists
+            if not hasattr(self, 'preview_point_index'):
+                self.preview_point_index = 0
+                
+            # Get the contour of first patch
+            contour = self.calibration_contour
+            current_point = contour[self.preview_point_index][0]
+            x, y = current_point
+            
+            # Apply galvo offsets and convert to galvo coordinates
+            x_off = x + self.cutter.galvo_offset_x
+            y_off = y + self.cutter.galvo_offset_y
+            x_hex, y_hex = self.cutter.pixel_to_galvo_coordinates(x_off, y_off)
+            
+            # Move laser without cutting
+            if self.cutter.galvo_connection:
+                self.cutter.sender.set_xy(x_hex, y_hex)
+                
+            # Move to next point in the patch contour
+            self.preview_point_index = (self.preview_point_index + 1) % len(contour)
+                
+        # Schedule next preview point
+        self.preview_timer = self.master.after(50, self.preview_cutting_path)
+
+    def adjust_pixel_ratio(self, delta):
+        if hasattr(self, 'calibration_active') and self.calibration_active:
+            self.cutter.pixel_cm_ratio += delta
+            self.update_ratio_display()
+            # Refresh pattern display if one is selected
+            if self.pattern_list.curselection():
+                self.search_selected_pattern()
+
+    def update_ratio_display(self):
+        if hasattr(self.cutter, 'pixel_cm_ratio'):
+            self.ratio_label.config(text=f"Ratio: {self.cutter.pixel_cm_ratio:.1f}")
+
         
     ### Load pattern image
     def on_camera_frame_resize(self, event):
@@ -1093,6 +1175,9 @@ class PatchCutterGUI:
         self.status_text.delete(1.0, tk.END)
         self.status_text.insert(tk.END, message)
         self.status_text.config(state='disabled')
+    
+
+        
     
     def exit_application(self):
         """Clean exit handling"""
