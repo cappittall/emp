@@ -1,1 +1,12 @@
-{"sam_confidence": 0.7, "stability_score": 0.92, "min_patch_area": 25.0, "travel_speed": 5000, "cut_speed": 5000, "laser_power": 50, "frequency": 100, "laser_on_delay": 1, "laser_off_delay": 1}
+{
+    "sam_confidence": 0.7,
+    "stability_score": 0.92,
+    "min_patch_area": 25.0,
+    
+    "travel_speed": 5000,
+    "cut_speed": 5000,
+    "power": 50,
+    "frequency": 100,
+    "laser_on_delay": 1,
+    "laser_off_delay": 1
+}

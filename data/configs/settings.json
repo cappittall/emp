@@ -1,0 +1,14 @@
+{
+    "total_hex_distance": 65535.0,
+    "total_cm_distance": 16.3,
+    "pixel_cm_ratio": 29.603448275862068,
+    "galvo_offset_x": 0.0,
+    "galvo_offset_y": 141.3793103448276,
+    "travel_speed": 5000.0,
+    "frequency": 109.22413793103449,
+    "power": 51.293103448275865,
+    "cut_speed": 10853.448275862069,
+    "laser_on_delay": 0.8620689655172413,
+    "laser_off_delay": 1.0,
+    "polygon_delay": 50.0
+}

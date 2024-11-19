@@ -43,3 +43,8 @@ Here's a clear breakdown of the optimized patch detection process:
 - Generate path visualization
 - Prepare machine instructions
 - Save pattern data
+
+
+## Creating Exe file
+pip install pyinstaller
+pyinstaller --onefile --noconsole --add-data "data;data" --hidden-import wmi --hidden-import win32com.client gui.py

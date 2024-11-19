@@ -25,44 +25,33 @@ except Exception as e:
     sys.exit(1)
     
 
-GALVO_SETTINGS_DEFAULT = {
-                    'travel_speed': 5000,
-                    'frequency': 100,
-                    'power': 50,
-                    'cut_speed': 5000,
-                    'laser_on_delay': 1,
-                    'laser_off_delay': 1,
-                    'polygon_delay': 50
-                }
-
 # import torch
 class PatchCutter:
     
-    def __init__(self, galvo_settings=GALVO_SETTINGS_DEFAULT):
-        self.calibration_file = 'data/configs/calibration.json'
-        self.is_cutting = False
-        self.template_mask = None
-        self.settings = {}  # Add settings dictionary
+    def __init__(self, settings, settings_file ):
+        self.settings_file = settings_file
+        self.settings = settings.copy()  # Make a copy to avoid reference issues
+        self.hex_steps_per_cm = self.settings['total_hex_distance'] / self.settings['total_cm_distance']
+
         self.bg_lower = np.array([0, 0, 0])  # Default values
         self.bg_upper = np.array([180, 255, 255])  # Default values
-        self.galvo_settings = galvo_settings
-        self.calibration_mode = False
-        self.load_calibration()
-        
-        self.total_hex_distance = 51391 
-        self.total_cm_distance = 16.3
-        self.cm_per_hex_step = self.total_cm_distance / self.total_hex_distance
-        self.hex_steps_per_cm = self.total_hex_distance / self.total_cm_distance
-        
-        self.galvo_connection = False
-        self.galvo_control_thread = threading.Thread(target=self.connect_galvo_control)
-        self.galvo_control_thread.daemon = True
-        self.galvo_control_thread.start()
+  
+        self.calibration_mode = False        
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
         
         self.boundary_walking_event = threading.Event()
         self.boundary_walking_thread = None
+        self.settings_changed  = False
+        
+        self.init_hardware()
+        
+    def init_hardware(self):
+        self.galvo_connection = False
+        self.sender = None
+        self.galvo_control_thread = threading.Thread(target=self.connect_galvo_control)
+        self.galvo_control_thread.daemon = True
+        self.galvo_control_thread.start()
                          
     def connect_galvo_control(self):
         max_attempts = 5
@@ -71,11 +60,13 @@ class PatchCutter:
             try:                
                 self.sender = Sender()
                 cor_table_data = open("data/configs/jetsonCalibrationdeneme1.cor", 'rb').read()
-                if hasattr(self.sender, 'set_cor_table'):
-                    self.sender.set_cor_table(cor_table_data)
-                elif hasattr(self.sender, 'cor_table'):
+                
+                # Correct way to set cor_table
+                if hasattr(self.sender, 'cor_table'):
                     self.sender.cor_table = cor_table_data
-                self.sender.open(mock=DEBUG)
+                
+                # Open connection with proper mock parameter
+                self.sender.open(mock=bool(DEBUG))
                 self.galvo_connection = True
                 self.send_to_top_left()
                 logging.info("Galvo connected successfully")                    
@@ -85,12 +76,12 @@ class PatchCutter:
                 self.galvo_connection = False
                 self.sender = None
                 time.sleep(2)
-                
-                
+                        
     def send_to_top_left(self):
-        galvo_offset_x_hex, galvo_offset_y_hex = self.pixel_to_galvo_coordinates(self.galvo_offset_x, self.galvo_offset_y)
-        self.sender.set_xy(galvo_offset_x_hex, galvo_offset_y_hex)
-        
+        # Access dictionary values with square brackets instead of calling
+        offsets = self.pixel_to_galvo_coordinates(self.settings['galvo_offset_x'], self.settings['galvo_offset_y'])
+        self.sender.set_xy(*offsets)
+    
     def set_background_range(self, bg_analysis):
         """Set background color range from analysis"""
         self.bg_lower = np.array(bg_analysis['range']['lower'])
@@ -229,45 +220,37 @@ class PatchCutter:
                       
     def adjust_galvo_offset(self, dx, dy):
         with self.lock:
-            self.galvo_offset_x += dx
-            self.galvo_offset_y += dy
-            hex_x, hex_y = self.pixel_to_galvo_coordinates(self.galvo_offset_x, self.galvo_offset_y)
+            # Access and modify dictionary values directly
+            self.settings['galvo_offset_x'] += dx
+            self.settings['galvo_offset_y'] += dy
+            hex_x, hex_y = self.pixel_to_galvo_coordinates(
+                self.settings['galvo_offset_x'], 
+                self.settings['galvo_offset_y']
+            )
             self.sender.set_xy(hex_x, hex_y)
-            print(f"Galvo offset: X={self.galvo_offset_x}, Y={self.galvo_offset_y}") 
+            self.settings_changed = True
+            print(f"Galvo offset: X={self.settings['galvo_offset_x']}, Y={self.settings['galvo_offset_y']}")
             
     def toggle_calibration_mode(self):
         self.calibration_mode = not self.calibration_mode
         if self.calibration_mode:
             print("Calibration mode started.")
             # Load the first contour for visualization
-            
         else:
             print("Calibration mode stopped.")
-            # Save the final pixel_cm_ratio to disk
-            self.save_calibration()
-     
-    def save_calibration(self):
-        calibration_data = {
-            "pixel_cm_ratio": self.pixel_cm_ratio,
-            "galvo_offset_x": self.galvo_offset_x,
-            "galvo_offset_y": self.galvo_offset_y
-        }
-        os.makedirs(os.path.dirname(self.calibration_file), exist_ok=True)
-        with open(self.calibration_file, "w") as file:
-            json.dump(calibration_data, file)
-        print(f"Calibration saved: galvo_offset_x = {self.galvo_offset_x}, galvo_offset_y = {self.galvo_offset_y}")
-        
+            threading.Thread(target=self.save_settings()).start() 
+            
+                    
     def calibrate_cm_pixel_ratio(self, frame):
         """Calibrate using ArUco markers with error handling"""
         try:
-            # Create detector parameters and dictionary
-            parameters = cv2.aruco.DetectorParameters_create()
-            aruco_dict = cv2.aruco.Dictionary_get(cv2.aruco.DICT_5X5_50)
-        except AttributeError:
             # Handle newer OpenCV versions
             parameters = cv2.aruco.DetectorParameters()
             aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_50)
-
+        except AttributeError:
+            # Create detector parameters and dictionary
+            parameters = cv2.aruco.DetectorParameters_create()
+            aruco_dict = cv2.aruco.Dictionary_get(cv2.aruco.DICT_5X5_50)
         try:
             # Create detector and detect markers
             detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
@@ -275,17 +258,9 @@ class PatchCutter:
             
             if corners:
                 aruco_perimeter = cv2.arcLength(corners[0], True)
-                self.pixel_cm_ratio = aruco_perimeter / 20  # Assuming 20cm marker size
-                
-                # Save calibration data
-                calibration_data = {
-                    "pixel_cm_ratio": self.pixel_cm_ratio,
-                    "galvo_offset_x": self.galvo_offset_x, 
-                    "galvo_offset_y": self.galvo_offset_y                   
-                }
-                
-                with open("data/configs/calibration.json", "w") as f:
-                    json.dump(calibration_data, f, indent=4)
+                self.settings['pixel_cm_ratio'] = aruco_perimeter / 20
+                self.settings_changed = True
+                threading.Thread(target=self.save_settings()).start() 
                     
                 return True
             else:
@@ -293,46 +268,41 @@ class PatchCutter:
                 
         except Exception as e:
             raise Exception(f"Calibration failed: {str(e)}")
+                    
+    def save_settings(self):
+        os.makedirs(os.path.dirname(self.settings_file), exist_ok=True)
+        with open(self.settings_file, 'w') as f:
+            json.dump(self.settings, f, indent=4)
     
-    def load_calibration(self):
-        try:
-            with open(self.calibration_file, 'r') as file:
-                calibration_data = json.load(file)
-                self.pixel_cm_ratio = calibration_data.get('pixel_cm_ratio', 39.633)
-                self.galvo_offset_x = calibration_data.get('galvo_offset_x', -35)
-                self.galvo_offset_y = calibration_data.get('galvo_offset_y', 532)
-                
-            print(f'Loaded calibration: pixel_cm_ratio = {self.pixel_cm_ratio},  '
-                  f'galvo_offset_x = {self.galvo_offset_x}, galvo_offset_y = {self.galvo_offset_y}')
-        except FileNotFoundError:
-            print(f"Calibration file {self.calibration_file} not found. Using default values.")
-            self.galvo_offset_x = 40
-            self.galvo_offset_y = 380
-            self.pixel_cm_ratio = 39.633
+    def update_hex_steps_per_cm(self):
+        self.hex_steps_per_cm = self.settings.get('total_hex_distance', 51391) / self.settings.get('total_cm_distance', 16.3)
+        print(f"Hex steps per cm: {self.hex_steps_per_cm} initialized ")
+        
+    def update_galvo_settings(self, setting_name, value):
+      # Only update if value actually changed
+        if self.settings.get(setting_name) != value:
+            self.settings[setting_name] = value
             
-    def clamp_galvo_coordinates(self, x, y):
-        # Assuming the valid range is 0-65535 (16-bit)
-        x = max(0, min(x, 65535))
-        y = max(0, min(y, 65535))
-        return x, y  
-    
+            if setting_name in ('total_hex_distance', 'total_cm_distance'):
+                self.update_hex_steps_per_cm()
+                
+            self.settings_changed = True
+            threading.Thread(target=self.save_settings).start()
+            
     def pixel_to_galvo_coordinates(self, x, y):
-        # Convert pixel coordinates to cm using the fixed ratio
-        cm_x = x / self.pixel_cm_ratio
-        cm_y = y / self.pixel_cm_ratio
-
+        # Convert pixel to cm
+        cm_x = x / self.settings['pixel_cm_ratio']
+        cm_y = y / self.settings['pixel_cm_ratio']
+        
         # Convert cm to hex steps
-        hex_x = round(cm_x * self.hex_steps_per_cm)
-        hex_y = round(cm_y * self.hex_steps_per_cm)
-
-        # Clamp the coordinates to valid range
-        hex_x, hex_y = self.clamp_galvo_coordinates(hex_x, hex_y)
-
-        # Convert to hexadecimal and ensure 4-digit representation
-        hex_x_str = f"{hex_x:04X}"
-        hex_y_str = f"{hex_y:04X}"
-
-        return hex_x, hex_y
+        hex_x = int(cm_x * self.hex_steps_per_cm)
+        hex_y = int(cm_y * self.hex_steps_per_cm)
+        
+        # Clamp values
+        return (
+            max(0, min(hex_x, 65535)),
+            max(0, min(hex_y, 65535))
+        )
                     
     def calculate_column_width(self, pattern_data):
         """Calculate optimal column width based on pattern distribution"""
@@ -360,6 +330,9 @@ class PatchCutter:
         """Execute cutting sequence for detected patterns in optimized order"""
         if not self.sender:
             raise RuntimeError("Laser sender not initialized")
+        
+        total_patterns = len(contours)
+        current_pattern = 0
 
         # Get centers and organize into columns
         pattern_data = []
@@ -410,18 +383,16 @@ class PatchCutter:
         time.sleep(0.1)
 
         # Cutting parameters
-        params = {
-            'travel_speed': self.galvo_settings['travel_speed'],
-            'frequency': self.galvo_settings['frequency'],
-            'power': self.galvo_settings['power'],
-            'cut_speed': self.galvo_settings['cut_speed'],
-            'laser_on_delay': self.galvo_settings['laser_on_delay'],
-            'laser_off_delay': self.galvo_settings['laser_off_delay'],
-            'polygon_delay': self.galvo_settings['polygon_delay'],
-        }
+        galvo_keys = ['travel_speed', 'frequency', 'power', 'cut_speed', 'laser_on_delay', 'laser_off_delay','polygon_delay' ]
+        params = {k:self.settings[k] for k in galvo_keys }
 
         # Cut patterns in optimized order
         for idx in optimized_indices:
+            current_pattern += 1
+            # Update progress through callback
+            if hasattr(self, 'progress_callback'):
+                self.progress_callback(current_pattern, total_patterns)
+            
             contour = contours[idx]
 
             # Move to starting position of the contour
@@ -429,8 +400,8 @@ class PatchCutter:
             x, y = start_point
 
             # Apply galvo offsets
-            x_off = x + self.galvo_offset_x
-            y_off = y + self.galvo_offset_y
+            x_off = x + self.settings['galvo_offset_x']
+            y_off = y + self.settings['galvo_offset_y']
 
             # Convert to galvo coordinates
             x_hex, y_hex = self.pixel_to_galvo_coordinates(x_off, y_off)
@@ -449,8 +420,8 @@ class PatchCutter:
                     px, py = point[0]
 
                     # Apply galvo offsets
-                    px_off = px + self.galvo_offset_x
-                    py_off = py + self.galvo_offset_y
+                    px_off = px + self.settings['galvo_offset_x']
+                    py_off = py + self.settings['galvo_offset_y']
 
                     # Convert to galvo coordinates
                     px_hex, py_hex = self.pixel_to_galvo_coordinates(px_off, py_off)

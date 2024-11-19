@@ -4,24 +4,32 @@ import os
 import re
 import shutil
 import signal
-import sys 
+import sys
 import threading
 import time
 import tkinter as tk
 
-from tkinter import ttk, filedialog, messagebox, simpledialog
+from tkinter import ttk, filedialog, messagebox
 from PIL import Image, ImageTk
 import cv2
 from matplotlib import pyplot as plt
 import numpy as np
-from constant import PATCH_SETTINGS_DEFAULT
+
+from constant import GALVO_SETTINGS_DEFAULT
 from patch_cutter import PatchCutter
+
+from hardware_check import verify_license
+
+# Different for each device
+DEVICE_HASH = "your_specific_device_hash_here"  
+
 
 class PatchCutterGUI:  
     def __init__(self, master, video_source=0):
-        self.settings_file = 'data/configs/patch_settings.json'
+        self.settings_file = 'data/configs/settings.json'
         self.screen_size_file = 'data/configs/screen-size.txt'
-        self.load_settings(self.settings_file)
+        self.settings = self.load_galvo_settings(self.settings_file)
+        
         self.master = master
         self.master.title("Embroidery Patch Cutter")
         try:
@@ -52,81 +60,102 @@ class PatchCutterGUI:
         self.threshold_timer = None
         self.offset_timer = None
         self._connection_timer = None
-        
-        self.loading_label = None
-        
+        self.loading_label = None 
                             
-        self.cutter = PatchCutter()  
-        self.create_main_layout()
-                
-        os.makedirs('data', exist_ok=True)
-        os.makedirs('checkpoints', exist_ok=True)
-               
+        self.cutter = PatchCutter(settings=self.settings, settings_file=self.settings_file)  
+        self.create_main_layout()    
         # Initialize camera in GUI only
         self.video_source = video_source
-        camera_initialized = self.init_camera()
-        if not camera_initialized:
-            # Handle camera initialization failure gracefully
-            self.update_status("Camera initialization failed. Camera-dependent features will be disabled.")
-            # Disable camera-dependent features or set flags accordingly
-        else:
-            # Start camera feed if available
-            if hasattr(self, 'cap') and self.cap.isOpened():
-                self.update_camera_feed()
+        self.mode = "camera" # image, camera
+        self.image_path = 'data/img/ar0.png'
+        self.init_camera()
+        self.update_camera_feed()
         self.current_image_rgb = None            
         self.update_pattern_list()
-            
+        
     def create_main_layout(self):       
-    # Create main container frame
+        # Create main container frame
         self.main_container = ttk.Frame(self.master)
         self.main_container.pack(fill=tk.BOTH, expand=True)
         
-        # Left panel for camera feed with weight
+        # Left panel for camera feed
         self.left_panel = ttk.Frame(self.main_container)
         self.left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
-        # Camera Feed
+            
+        # Configure grid in left_panel
+        self.left_panel.rowconfigure(0, weight=1)
+        self.left_panel.rowconfigure(1, weight=0)
+        self.left_panel.columnconfigure(0, weight=1)
+            
+        # Camera frame
         self.camera_frame = ttk.LabelFrame(self.left_panel, text="Camera Feed")
-        self.camera_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
+        self.camera_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+
+        # Configure grid in camera_frame
+        self.camera_frame.rowconfigure(0, weight=1)
+        self.camera_frame.columnconfigure(0, weight=1)
+
+        # Camera canvas
         self.camera_canvas = tk.Canvas(self.camera_frame)
-        self.camera_canvas.pack(fill=tk.BOTH, expand=True)
+        self.camera_canvas.grid(row=0, column=0, sticky="nsew")
+
+        # Status frame
+        self.status_frame = ttk.LabelFrame(self.left_panel, text="Status")
+        self.status_frame.grid(row=1, column=0, sticky="ew", padx=5, pady=5)
         
-        # Right panel with fixed width
-        self.right_panel = ttk.Frame(self.main_container, width=400)
+        self.status_text = tk.Text(self.status_frame, height=4, wrap=tk.WORD)
+        self.status_text.pack(fill=tk.X, padx=5, pady=5)
+        self.status_text.config(state='disabled', bg='black', fg='white')
+        
+        # Right panel with fixed width and tabs
+        self.right_panel = ttk.Frame(self.main_container, width=450)
         self.right_panel.pack(side=tk.RIGHT, fill=tk.Y, padx=5)
-        self.right_panel.pack_propagate(False)  # Prevent right panel from shrinking
-        self.master.grid_columnconfigure(1, weight=1)
+        self.right_panel.pack_propagate(False)
         
-        # 1. Mask Creation - Horizontal button layout
-        self.pattern_creation_frame = ttk.LabelFrame(self.right_panel, text="1. Patern Creation")
+        # Create notebook for tabs
+        self.tabs = ttk.Notebook(self.right_panel)
+        self.tabs.pack(fill=tk.BOTH, expand=True)
+        
+        # Create Patch Detection tab
+        self.detection_tab = ttk.Frame(self.tabs)
+        self.tabs.add(self.detection_tab, text="Detection")
+        
+        # Create Galvo Settings tab
+        self.galvo_tab = ttk.Frame(self.tabs)
+        self.tabs.add(self.galvo_tab, text="Settings")
+        
+        # Add existing controls to Patch Detection tab
+        self.create_detection_controls(self.detection_tab)
+        
+        # Add slider controls to Galvo Settings tab
+        self.create_galvo_controls(self.galvo_tab)
+        
+        # Exit button remains at bottom of right panel
+        self.exit_button = ttk.Button(self.right_panel, text="Exit", 
+                                    command=self.exit_application)
+        self.exit_button.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=10)
+            
+    def create_detection_controls(self, parent):
+        # 1. Mask Creation
+        self.pattern_creation_frame = ttk.LabelFrame(parent, text="1. Pattern Creation")
         self.pattern_creation_frame.pack(fill=tk.X, padx=5, pady=5)
-
-
-        # Create a frame for horizontal button arrangement
+        
         button_frame = ttk.Frame(self.pattern_creation_frame)
         button_frame.pack(fill=tk.X, padx=2, pady=2)
-
-
-        # In create_main_layout method, modify the button frame section:
-        ttk.Button(button_frame, text="Select", 
-                command=self.start_selection).pack(side=tk.LEFT, padx=2)
-        ttk.Button(button_frame, text="Load Image", 
-                command=self.load_image).pack(side=tk.LEFT, padx=2)
-        ttk.Button(button_frame, text="Generate", 
-                command=self.generate_masks).pack(side=tk.LEFT, padx=2)
+        
+        ttk.Button(button_frame, text="Select", command=self.start_selection).pack(side=tk.LEFT, padx=2)
+        ttk.Button(button_frame, text="Load Image", command=self.load_image).pack(side=tk.LEFT, padx=2)
+        ttk.Button(button_frame, text="Generate", command=self.generate_masks).pack(side=tk.LEFT, padx=2)
         
         # 2. Pattern Display
-        self.pattern_frame = ttk.LabelFrame(self.right_panel, text="2. Detected Pattern")
+        self.pattern_frame = ttk.LabelFrame(parent, text="2. Detected Pattern")
         self.pattern_frame.pack(fill=tk.X, padx=5, pady=5)
         self.pattern_canvas = tk.Canvas(self.pattern_frame, width=150, height=150)
         self.pattern_canvas.pack(fill=tk.X, padx=5, pady=5)
-
-
-        # 3. Pattern Library
-        self.pattern_library_frame = ttk.LabelFrame(self.right_panel, text="3. Pattern Library")
-        self.pattern_library_frame.pack(fill=tk.X, padx=5, pady=5)
         
+        # 3. Pattern Library
+        self.pattern_library_frame = ttk.LabelFrame(parent, text="3. Pattern Library")
+        self.pattern_library_frame.pack(fill=tk.X, padx=5, pady=5)
         
         # Pattern list with scrollbar
         list_frame = ttk.Frame(self.pattern_library_frame)
@@ -135,19 +164,26 @@ class PatchCutterGUI:
         scrollbar = ttk.Scrollbar(list_frame)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        self.pattern_list = tk.Listbox(list_frame, height=5, yscrollcommand=scrollbar.set)
+        self.pattern_list = tk.Listbox(list_frame, height=10, yscrollcommand=scrollbar.set)
         self.pattern_list.pack(fill=tk.X, side=tk.LEFT, expand=True)
         scrollbar.config(command=self.pattern_list.yview)
         
-        # Add pattern management buttons
-        self.manage_patterns()
+        # Pattern management buttons
+        button_frame = ttk.Frame(self.pattern_library_frame)
+        button_frame.pack(fill=tk.X, padx=2, pady=2)
+        
+        ttk.Button(button_frame, text="Rename", 
+                command=self.rename_pattern).pack(side=tk.LEFT, padx=2)
+        ttk.Button(button_frame, text="Delete", 
+                command=self.delete_pattern).pack(side=tk.LEFT, padx=2)
+        ttk.Button(button_frame, text="Search", 
+                command=self.search_selected_pattern).pack(side=tk.LEFT, padx=2)
         
         # Bind selection event
         self.pattern_list.bind('<<ListboxSelect>>', self.on_pattern_select)
 
-
-        # 4. Live Detection
-        detection_frame = ttk.LabelFrame(self.right_panel, text="4. Live Detection")
+        # 4. Live Detection (Moved under "3. Pattern Library")
+        detection_frame = ttk.LabelFrame(parent, text="4. Live Detection")
         detection_frame.pack(fill=tk.X, padx=5, pady=5)
 
         # Threshold slider with value
@@ -190,77 +226,244 @@ class PatchCutterGUI:
             variable=self.offset_var,
             command=self.on_offset_change
         )
-        offset_slider.pack(fill=tk.X, padx=5, pady=2)
-
-        
-        # 5. Process Controls
-        self.process_frame = ttk.LabelFrame(self.right_panel, text="5. Process Controls")
-        self.process_frame.pack(fill=tk.X, padx=5, pady=5)
-        
-        # Create horizontal button frame with status indicator
-        control_frame = ttk.Frame(self.process_frame)
-        control_frame.pack(fill=tk.X, padx=5, pady=2)
-        
-        # Connection status indicator
-        self.connection_indicator = tk.Canvas(control_frame, width=20, height=20)
-        self.connection_indicator.pack(side=tk.LEFT, padx=5)
-        
-        # Add buttons horizontally
-        self.cut_button = ttk.Button(control_frame, text="Start Cutting", 
-                                    command=self.start_cutting_process)
-        self.cut_button.pack(side=tk.LEFT, padx=5)
-        
-        self.aruco_calibrate_button = ttk.Button(control_frame, text="ArUco Calibrate", 
-                                                command=self.aruco_calibrate)
-        self.aruco_calibrate_button.pack(side=tk.LEFT, padx=5)
-        
-        
-        # Add calibration controls to Process Controls frame
-        calibration_frame = ttk.Frame(self.process_frame)
-        calibration_frame.pack(fill=tk.X, padx=5, pady=2)
-        
-        self.calibrate_button = ttk.Button(calibration_frame, text="Start Calibration", 
-                                        command=self.toggle_calibration)
-        self.calibrate_button.pack(side=tk.LEFT, padx=2)
-        
-        ttk.Button(calibration_frame, text="+", 
-                command=lambda: self.adjust_pixel_ratio(1)).pack(side=tk.LEFT, padx=2)
-        ttk.Button(calibration_frame, text="-", 
-                command=lambda: self.adjust_pixel_ratio(-1)).pack(side=tk.LEFT, padx=2)
-        
-        # Add pixel ratio display label
-        self.ratio_label = ttk.Label(calibration_frame, text="")
-        self.ratio_label.pack(side=tk.LEFT, padx=5)
-        self.update_ratio_display()
-        
-        # Start connection status monitoring
-        self.update_connection_status()
-
-        # Exit button at bottom
-        self.exit_button = ttk.Button(self.right_panel, text="Exit", 
-                                    command=self.exit_application)
-        self.exit_button.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=10)
-        
-        # Status text area
-        self.status_frame = ttk.LabelFrame(self.right_panel, text="Status")
-        self.status_frame.pack(fill=tk.X, padx=5, pady=2, expand=False)
-        self.status_text = tk.Text(self.status_frame, height=4, wrap=tk.WORD, width=30)
-        self.status_text.pack(fill=tk.X, padx=5, pady=2, expand=False)
-        self.status_text.config(state='disabled')  
-        
+        offset_slider.pack(fill=tk.X, padx=5, pady=2)       
         
         # Add key bindings
         self.master.bind('<c>', self.toggle_offset_calibration)
         self.master.bind('<w>', lambda event: self.adjust_galvo_offset(0, -1))
         self.master.bind('<s>', lambda event: self.adjust_galvo_offset(0, 1))
         self.master.bind('<a>', lambda event: self.adjust_galvo_offset(-1, 0))
-        self.master.bind('<d>', lambda event: self.adjust_galvo_offset(1, 0))
-        self.master.bind('<r>', self.reset_galvo_offset)   
-        self.master.bind('<l>', self.walk_galvo_boundary)   
+        self.master.bind('<d>', lambda event: self.adjust_galvo_offset(1, 0)) 
+        self.master.bind('<l>', self.walk_galvo_boundary)  
+
+    def create_galvo_controls(self, parent):
+        slider_frame = ttk.LabelFrame(parent, text="Galvo Settings")
+        slider_frame.pack(fill=tk.X, pady=5)
         
-    
-    
+        # Define slider ranges once
+        SLIDER_RANGES = {
+            'total_hex_distance': (0, 65535),
+            'total_cm_distance': (16.3, 40.0),
+            'pixel_cm_ratio': (20, 80),
+            'galvo_offset_x': (0, 800),
+            'galvo_offset_y': (0, 800),
+            '__separator1__': None, 
+            'travel_speed': (1000, 128000),
+            'cut_speed': (1000, 128000),
+            'frequency': (20, 200),
+            'power': (0, 100),
+            'laser_on_delay': (0, 100),
+            'laser_off_delay': (0, 100),
+            'polygon_delay': (0, 50)
+        }
         
+        self.sliders = {}
+        self.slider_values = {}
+        
+        for setting, value in self.cutter.settings.items():
+             # Check if we need to add a separator
+            if setting == 'travel_speed':
+                separator = ttk.Separator(slider_frame, orient='horizontal')
+                separator.pack(fill=tk.X, padx=5, pady=10)
+                
+            frame = ttk.Frame(slider_frame)
+            frame.pack(fill=tk.X, padx=5, pady=2)
+            
+            label = ttk.Label(frame, text=setting.replace('_', ' ').title(), width=15)
+            label.pack(side=tk.LEFT)
+            
+            value_label = ttk.Label(frame, text=f"{value:.1f}", width=8)
+            value_label.pack(side=tk.RIGHT)
+            
+            min_val, max_val = SLIDER_RANGES.get(setting, (0, 500000))
+            slider = ttk.Scale(
+                frame, 
+                from_=min_val, 
+                to=max_val,
+                orient=tk.HORIZONTAL,
+                command=lambda v, s=setting, vl=value_label: self.update_setting(s, v, vl)
+            )
+            slider.set(value)
+            slider.pack(side=tk.RIGHT, expand=True, fill=tk.X, padx=(0, 5))
+            
+            self.sliders[setting] = slider
+            self.slider_values[setting] = value_label
+                
+        # Add Process Controls to Galvo tab
+        self.process_frame = ttk.LabelFrame(parent, text="Process Controls")
+        self.process_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        # Single horizontal frame for all controls
+        control_frame = ttk.Frame(self.process_frame)
+        control_frame.pack(fill=tk.X, padx=5, pady=2)
+
+        # Connection status indicator
+        self.connection_indicator = tk.Canvas(control_frame, width=20, height=20)
+        self.connection_indicator.pack(side=tk.LEFT, padx=5)
+
+        # All buttons in one row
+        self.cut_button = ttk.Button(control_frame, text="Start Cutting", command=self.start_cutting_process)
+        self.cut_button.pack(side=tk.LEFT, padx=2)
+
+        self.aruco_calibrate_button = ttk.Button(control_frame, text="ArUco Auto", command=self.aruco_calibrate)
+        self.aruco_calibrate_button.pack(side=tk.LEFT, padx=2)
+        self.calibrate_button = ttk.Button(control_frame, text="ArUco Manual", command=self.toggle_calibration)
+        self.calibrate_button.pack(side=tk.LEFT, padx=2)
+        ttk.Button(control_frame, text="+", command=lambda: self.adjust_pixel_ratio(1)).pack(side=tk.LEFT, padx=2)
+        ttk.Button(control_frame, text="-", command=lambda: self.adjust_pixel_ratio(-1)).pack(side=tk.LEFT, padx=2)  
+        
+        # Add progress label under control frame
+        self.progress_frame = ttk.Frame(self.process_frame)
+        self.progress_frame.pack(fill=tk.X, padx=5, pady=2)
+        
+        self.progress_label = ttk.Label(self.progress_frame, text="Ready to cut")
+        self.progress_label.pack(side=tk.LEFT, padx=5)
+              
+        self.update_connection_status()
+            
+    def init_camera(self):
+        # Try different camera indices
+        for cam_index in range(2):  # Try camera 0 and 1
+            self.cap = cv2.VideoCapture(cam_index)
+            if self.cap.isOpened():
+                # Camera successfully opened
+                self.video_source = cam_index
+                break
+        
+        if not self.cap.isOpened():
+            self.update_status("No camera found. Using fallback mode.")
+            return False        
+        # Get actual dimensions (may differ from requested)
+        self.original_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.original_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))        
+        # Set canvas size
+        self.canvas_width = 800
+        self.canvas_height = 800
+        self.camera_canvas.config(width=self.canvas_width, height=self.canvas_height)        
+        # Calculate scaling factors
+        self.scale_factor = min(self.canvas_width/self.original_width, 
+                            self.canvas_height/self.original_height)        
+        # Calculate display dimensions
+        self.display_width = int(self.original_width * self.scale_factor)
+        self.display_height = int(self.original_height * self.scale_factor)        
+        # Calculate padding
+        self.pad_x = (self.canvas_width - self.display_width) // 2
+        self.pad_y = (self.canvas_height - self.display_height) // 2
+        return True
+    
+    def draw_detected_patterns(self):
+        """Draw detected patterns on camera canvas"""
+        if hasattr(self, 'detected_contours') and self.detected_contours and self.show_detected_pattern:
+            for contour in self.detected_contours:
+                # Convert contour points to list for create_polygon
+                points = contour.reshape(-1).tolist()
+                # Draw contour as polygon
+                self.camera_canvas.create_polygon(points, 
+                                            outline='green',
+                                            width=2,
+                                            fill='')
+                
+    def update_camera_feed(self, mode='camera'):
+        """
+        Unified camera feed update function
+        mode: 'camera' or 'image'
+        """
+        if self.mode == 'camera':
+            if not hasattr(self, 'cap') or not self.cap.isOpened():
+                self.update_status("Camera not available")
+                return
+            ret, frame = self.cap.read()
+            if not ret:
+                return
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            self.original_frame = frame.copy()
+        elif self.mode == "image":
+            # Ensure the image is loaded
+            if not hasattr(self, 'image_path') or not os.path.exists(self.image_path):
+                self.update_status("Image not loaded")
+                return
+            else:
+                # Load
+                self.original_frame = cv2.imread(self.image_path)
+                frame = self.original_frame.copy()
+                
+        # Get the dimensions of the frame
+        h, w = frame.shape[:2]
+
+        # Calculate coordinates for cropping to a square
+        min_dim = min(h, w)
+        start_x = (w - min_dim) // 2
+        start_y = (h - min_dim) // 2
+        end_x = start_x + min_dim
+        end_y = start_y + min_dim
+
+        # Crop the frame to a square
+        frame_cropped = frame[start_y:end_y, start_x:end_x]
+
+        # Resize the cropped frame to 800x800
+        frame_resized = cv2.resize(frame_cropped, (800, 800), interpolation=cv2.INTER_LINEAR)
+        self.current_image_rgb = frame_resized.copy()
+        
+        # Convert and display
+        image = Image.fromarray(frame_resized)
+        photo = ImageTk.PhotoImage(image=image)
+        self.camera_canvas.delete("all")
+        self.camera_canvas.create_image(0, 0, image=photo, anchor='nw')
+        self.camera_canvas._photo = photo
+        
+        # Replace the settings check with a one-time update
+        if self.cutter.settings_changed:
+            self.update_gui_settings()
+            # Draw detected patterns if they exist
+        if self.show_detected_pattern:
+            self.draw_detected_patterns()
+            
+        # Schedule next update
+        self.master.after(30, lambda: self.update_camera_feed(mode))
+
+
+    def update_gui_settings(self):
+        """Update GUI sliders without triggering additional changes"""
+        # Temporarily disable slider callbacks
+        callbacks = {}
+        for key, slider in self.sliders.items():
+            callbacks[key] = slider.cget('command')
+            slider.configure(command='')
+            
+        # Update values
+        for key, val in self.cutter.settings.items():
+            self.sliders[key].set(val)
+            self.slider_values[key].config(text=f"{val:.1f}")
+            
+        # Re-enable callbacks
+        for key, callback in callbacks.items():
+            self.sliders[key].configure(command=callback)
+            
+        # Reset the changed flag
+        self.cutter.settings_changed = False
+
+                    
+    # Update the update_status method to handle the text widget state
+    def update_status(self, message):
+        self.status_text.config(state='normal')
+        self.status_text.delete(1.0, tk.END)
+        self.status_text.insert(tk.END, message)
+        self.status_text.config(state='disabled')
+        
+
+            
+    # TODO : update va
+    def update_setting(self, setting_name, value, value_label):
+        value = float(value)
+        value_label.config(text=f"{value:.0f}")
+        if self.cutter:
+            self.cutter.update_galvo_settings(setting_name, float(value))
+            
+    #TODO
+    def toggle_point_deviation(self):
+        if self.cutter:        
+            print(f"Use Point Deviation: {self.use_point_deviation.get()}")
+
     def show_loading(self):
         """Show loading indicator"""
         if not self.loading_label:
@@ -296,7 +499,7 @@ class PatchCutterGUI:
         
         offset_mm = self.offset_var.get()
         # Convert mm to pixels using calibration ratio
-        offset_pixels = offset_mm * (self.cutter.pixel_cm_ratio / 10)  # divide by 10 to convert cm to mm
+        offset_pixels = offset_mm * (self.cutter.settings['pixel_cm_ratio'] / 10)  # divide by 10 to convert cm to mm
         
         self.detected_contours = []
         for original_contour in self.original_contours:
@@ -331,15 +534,15 @@ class PatchCutterGUI:
         self.calibration_active = not self.calibration_active
         
         if self.calibration_active:
-            self.calibrate_button.config(text="Stop Calibration")
+            self.calibrate_button.config(text="Stop Caib.")
             # Use first detected contour if available
             if hasattr(self, 'detected_contours') and len(self.detected_contours) > 0:
                 self.calibration_contour = self.detected_contours[0]
                 # Start laser preview
                 self.preview_cutting_path()
         else:
-            self.calibrate_button.config(text="Start Calibration")
-            self.cutter.save_calibration()
+            self.calibrate_button.config(text="ArUco Manual")
+            self.cutter.save_settings()
             # Stop laser preview
             if hasattr(self, 'preview_timer'):
                 self.master.after_cancel(self.preview_timer)
@@ -356,8 +559,8 @@ class PatchCutterGUI:
             current_point = contour[self.preview_point_index][0]
             x, y = current_point
             
-            x_off = x + self.cutter.galvo_offset_x
-            y_off = y + self.cutter.galvo_offset_y
+            x_off = x + self.cutter.settings['galvo_offset_x']
+            y_off = y + self.cutter.settings['galvo_offset_y']
             x_hex, y_hex = self.cutter.pixel_to_galvo_coordinates(x_off, y_off)
             
             if self.cutter.galvo_connection:
@@ -371,42 +574,16 @@ class PatchCutterGUI:
 
     def adjust_pixel_ratio(self, delta):
         if hasattr(self, 'calibration_active') and self.calibration_active:
-            self.cutter.pixel_cm_ratio += delta
-            self.update_ratio_display()
+            value = self.cutter.settings['pixel_cm_ratio'] + delta
+            print(f"Setting pixel_cm_ratio to {value}")
+            self.cutter.update_galvo_settings('pixel_cm_ratio', value)
+
+            self.update_status(f"Ratio: {value:.1f}")
             # Refresh contour display
             if hasattr(self, 'calibration_contour'):
                 self.show_detected_pattern = True
                 self.master.update()
-
-
-    def update_ratio_display(self):
-        if hasattr(self.cutter, 'pixel_cm_ratio'):
-            self.ratio_label.config(text=f"Ratio: {self.cutter.pixel_cm_ratio:.1f}")
-
-        
-    ### Load pattern image
-    def on_camera_frame_resize(self, event):
-        # Get new frame dimensions
-        frame_width = event.width
-        frame_height = event.height
-        
-        if hasattr(self, 'original_width') and hasattr(self, 'original_height'):
-            # Calculate new scaling factors
-            self.scale_factor = min(frame_width/self.original_width, 
-                                frame_height/self.original_height)
-            
-            # Update display dimensions
-            self.display_width = int(self.original_width * self.scale_factor)
-            self.display_height = int(self.original_height * self.scale_factor)
-            
-            # Update padding for centering
-            self.pad_x = max(0, (frame_width - self.display_width) // 2)
-            self.pad_y = max(0, (frame_height - self.display_height) // 2)
-            
-            # Configure canvas size
-            self.camera_canvas.config(width=frame_width, height=frame_height)
-            self.update_window_size()
-            
+                        
     def update_window_size(self):
         width = self.master.winfo_width()
         height = self.master.winfo_height()
@@ -788,21 +965,6 @@ class PatchCutterGUI:
                 points = [(x + int(p[0]), y + int(p[1])) for p in scaled_points]
                 self.pattern_canvas.create_polygon(points, outline='green', width=2, fill='')
 
-
-    def manage_patterns(self):
-        # Pattern management buttons
-        button_frame = ttk.Frame(self.pattern_library_frame)
-        button_frame.pack(fill=tk.X, padx=2, pady=2)
-        
-        ttk.Button(button_frame, text="Rename", 
-                command=self.rename_pattern).pack(side=tk.LEFT, padx=2)
-        ttk.Button(button_frame, text="Delete", 
-                command=self.delete_pattern).pack(side=tk.LEFT, padx=2)
-        ttk.Button(button_frame, text="Search", 
-                command=self.search_selected_pattern).pack(side=tk.LEFT, padx=2)
-
-
-
     def rename_pattern(self):
         selection = self.pattern_list.curselection()
         if selection:
@@ -922,6 +1084,13 @@ class PatchCutterGUI:
             # Disable button before starting
             self.cut_button.config(state='disabled')
             
+            def update_progress(current, total):
+                self.progress_label.config(text=f"Cutting: {current}/{total} patches")
+                self.master.update()
+            
+            # Set progress callback
+            self.cutter.progress_callback = update_progress
+            
             # Start cutting process in a separate thread
             def cutting_thread():
                 try:
@@ -957,8 +1126,6 @@ class PatchCutterGUI:
             # Use correct cleanup method name
             self.cutter.cleanup()
 
-            
-    #### GUI Camera  ##########################################################
     def generate_masks(self):
         pass
 
@@ -969,46 +1136,6 @@ class PatchCutterGUI:
         # Use LANCZOS instead of deprecated ANTIALIAS
         return image.resize(new_size, Image.Resampling.LANCZOS)  
 
-    def init_camera(self):
-        # Try different camera indices
-        for cam_index in range(2):  # Try camera 0 and 1
-            self.cap = cv2.VideoCapture(cam_index)
-            if self.cap.isOpened():
-                # Camera successfully opened
-                self.video_source = cam_index
-                break
-        
-        if not self.cap.isOpened():
-            self.update_status("No camera found. Using fallback mode.")
-            return False
-        
-        # Set camera properties
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)  # Lower resolution for better compatibility
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-        
-        # Get actual dimensions (may differ from requested)
-        self.original_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        self.original_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        
-        # Set canvas size
-        self.canvas_width = 800
-        self.canvas_height = 600
-        self.camera_canvas.config(width=self.canvas_width, height=self.canvas_height)
-        
-        # Calculate scaling factors
-        self.scale_factor = min(self.canvas_width/self.original_width, 
-                            self.canvas_height/self.original_height)
-        
-        # Calculate display dimensions
-        self.display_width = int(self.original_width * self.scale_factor)
-        self.display_height = int(self.original_height * self.scale_factor)
-        
-        # Calculate padding
-        self.pad_x = (self.canvas_width - self.display_width) // 2
-        self.pad_y = (self.canvas_height - self.display_height) // 2
-        
-        return True
-    
     def show_frame_on_canvas(self, frame, canvas):
         if frame is None:
             return
@@ -1023,7 +1150,6 @@ class PatchCutterGUI:
         # Draw new image
         canvas.create_image(self.pad_x, self.pad_y, image=photo, anchor=tk.NW)
         canvas._photo = photo
-
 
     def get_scaled_coordinates(self, event):
         # Adjust for image position on canvas
@@ -1054,9 +1180,7 @@ class PatchCutterGUI:
         # Position at true (0,0)
         target_x = self.pad_x
         target_y = self.pad_y
-        
 
-        
         # Draw quarter circles flowing northwest to southeast
         for i in range(3):
             r = radius - (i * radius/3)
@@ -1080,11 +1204,10 @@ class PatchCutterGUI:
             fill='red', outline='red'
         )
 
-
     def adjust_galvo_offset(self, dx, dy):
         if self.cutter and self.cutter.calibration_mode:
             self.cutter.adjust_galvo_offset(dx, dy)
-            self.update_status(f"Galvo offset: X={self.cutter.galvo_offset_x}, Y={self.cutter.galvo_offset_y}")
+            self.update_status(f"Galvo offset: X={self.cutter.settings['galvo_offset_x']}, Y= {self.cutter.settings['galvo_offset_y']} ")
             
     def walk_galvo_boundary(self, event=None):
         if hasattr(self.cutter, 'boundary_walking_event'):
@@ -1094,90 +1217,26 @@ class PatchCutterGUI:
             else:
                 self.cutter.start_walk_galvo_boundary()
                 self.update_status("Boundary walking started.")
+
             
-    def reset_galvo_offset(self, event=None):
-        if self.cutter and self.cutter.calibration_mode:
-            self.cutter.galvo_offset_x = -45
-            self.cutter.galvo_offset_y = 460
-            self.update_status("Galvo offsets reset to initial values.")
-            
+    def load_galvo_settings(self, setting_file ):
+        # Load settings from file if cutter is not initialized
+        try:
+            with open(setting_file, 'r') as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            print("Settings file not found or invalid. Using default settings.")
+            # Define default settings
+            return GALVO_SETTINGS_DEFAULT.copy()
+
     # Update the toggle_offset_calibration method
     def toggle_offset_calibration(self, event=None):
         self.calibration_mode = not self.calibration_mode
         status = "ON" if self.calibration_mode else "OFF"
-        
-        if self.calibration_mode:
-            self.update_status("Calibration Mode ON\nAlign laser with red center point\nUse WASD to adjust position\nPress 'r' to reset\nPress 'c' to toggle")
-        else:
-            self.update_status("Calibration Mode OFF")
-            
+        self.update_status(f"Calibration Mode ON {status}")            
         if self.cutter:
             self.cutter.toggle_calibration_mode()
-                
-    def update_camera_feed(self, mode='camera'):
-        """
-        Unified camera feed update function
-        mode: 'camera' or 'image'
-        """
-        if mode == 'camera':
-            if not hasattr(self, 'cap') or not self.cap.isOpened():
-                self.update_status("Camera not available")
-                return
-            ret, frame = self.cap.read()
-            if not ret:
-                return
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            self.original_frame = frame.copy()
-        else:
-            frame = self.current_frame.copy()
-        
-        # Common display logic
-        display_frame = cv2.resize(frame, (self.display_width, self.display_height))
-        
-        if self.show_detected_pattern and hasattr(self, 'detected_contours'):
-            for contour in self.detected_contours:
-                cv2.drawContours(display_frame, [contour], -1, (0, 255, 0), 2)
-        
-        # Convert and display
-        image = Image.fromarray(display_frame)
-        photo = ImageTk.PhotoImage(image=image)
-        
-        self.camera_canvas.delete("all")
-        self.camera_canvas.create_image(self.pad_x, self.pad_y, image=photo, anchor='nw')
-        self.camera_canvas._photo = photo
-        
-        if self.calibration_mode:
-            self.draw_calibration_target(self.camera_canvas)
-        
-        # Schedule next update
-        self.master.after(30, lambda: self.update_camera_feed(mode))
-        
-
-    
-    def load_settings(self, setting_file ):
-        # Load settings from file if cutter is not initialized
-        self.settings = PATCH_SETTINGS_DEFAULT.copy()
-        os.makedirs(os.path.dirname(setting_file), exist_ok=True)
-        
-        try:
-            with open(setting_file, 'r') as f:
-                loaded_settings = json.load(f)
-                self.settings.update(loaded_settings)
-        except (FileNotFoundError, json.JSONDecodeError):
-            # Save default settings
-            with open(setting_file, 'w') as f:
-                json.dump(self.settings, f, indent=4)
-                
-    # Update the update_status method to handle the text widget state
-    def update_status(self, message):
-        self.status_text.config(state='normal')
-        self.status_text.delete(1.0, tk.END)
-        self.status_text.insert(tk.END, message)
-        self.status_text.config(state='disabled')
-    
-
-        
-    
+          
     def exit_application(self):
         """Clean exit handling"""
         self._is_running = False
@@ -1204,14 +1263,18 @@ class PatchCutterGUI:
             print(f"Cleanup error: {e}")
         finally:
             # Schedule destruction in main thread
-            self.master.after(100, self._final_cleanup)
-        
+            self.master.after(100, self._final_cleanup)        
     
     def _final_cleanup(self):
         self.master.quit()
         self.master.destroy()
             
 if __name__ == "__main__":
+    
+    if not verify_license(DEVICE_HASH):
+        messagebox.showerror("Error", "Unauthorized hardware")
+        sys.exit(1)
+        
     try: 
         root = tk.Tk()
         app = PatchCutterGUI(root, video_source=0)
