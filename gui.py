@@ -1271,9 +1271,9 @@ class PatchCutterGUI:
             
 if __name__ == "__main__":
     
-    if not verify_license(DEVICE_HASH):
+    """ if not verify_license(DEVICE_HASH):
         messagebox.showerror("Error", "Unauthorized hardware")
-        sys.exit(1)
+        sys.exit(1) """
         
     try: 
         root = tk.Tk()
