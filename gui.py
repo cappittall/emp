@@ -30,6 +30,10 @@ class PatchCutterGUI:
         self.screen_size_file = 'data/configs/screen-size.txt'
         self.settings = self.load_galvo_settings(self.settings_file)
         
+        self.total_cuts = 0
+        self.cuts_file = 'data/configs/cuts_counter.txt'
+        self.load_cuts_counter()
+        
         self.master = master
         self.master.title("Embroidery Patch Cutter")
         try:
@@ -250,6 +254,7 @@ class PatchCutterGUI:
             '__separator1__': None, 
             'travel_speed': (1000, 128000),
             'cut_speed': (1000, 128000),
+            'jump_delay':(10,1000),
             'frequency': (20, 200),
             'power': (0, 100),
             'laser_on_delay': (0, 100),
@@ -313,11 +318,24 @@ class PatchCutterGUI:
         ttk.Button(control_frame, text="-", command=lambda: self.adjust_pixel_ratio(-1)).pack(side=tk.LEFT, padx=2)  
         
         # Add progress label under control frame
-        self.progress_frame = ttk.Frame(self.process_frame)
-        self.progress_frame.pack(fill=tk.X, padx=5, pady=2)
-        
+        self.progress_frame = ttk.Frame(self.process_frame)        
         self.progress_label = ttk.Label(self.progress_frame, text="Ready to cut")
         self.progress_label.pack(side=tk.LEFT, padx=5)
+        
+        # Add counter frame
+        counter_frame = ttk.Frame(self.process_frame)
+        counter_frame.pack(fill=tk.X, padx=5, pady=2)
+        
+        # Cuts counter display
+        self.cuts_counter_label = ttk.Label(counter_frame, text=f"Total Cuts: {self.total_cuts}")
+        self.cuts_counter_label.pack(side=tk.LEFT, padx=5)
+        
+        # Reset button
+        reset_button = ttk.Button(counter_frame, text="Reset Counter", command=self.reset_cuts_counter)
+        reset_button.pack(side=tk.RIGHT, padx=5)
+        
+        # Keep existing progress frame below
+        self.progress_frame.pack(fill=tk.X, padx=5, pady=2)
               
         self.update_connection_status()
             
@@ -363,6 +381,7 @@ class PatchCutterGUI:
                                             width=2,
                                             fill='')
                 
+                
     def update_camera_feed(self, mode='camera'):
         if self.mode == 'camera':
             if not hasattr(self, 'cap') or not self.cap.isOpened():
@@ -384,7 +403,7 @@ class PatchCutterGUI:
         # Get frame dimensions
         h, w = frame.shape[:2]
         
-        # Calculate scaling to fit 800x800 while maintaining aspect ratio
+        # Calculate scaling to fit exactly in 800x800
         scale = min(800/w, 800/h)
         
         # Calculate new dimensions
@@ -418,6 +437,7 @@ class PatchCutterGUI:
             
         # Schedule next update
         self.master.after(30, lambda: self.update_camera_feed(mode))
+
 
     def update_gui_settings(self):
         """Update GUI sliders without triggering additional changes"""
@@ -776,9 +796,10 @@ class PatchCutterGUI:
                 self.show_detected_pattern = False
                 self.update_status(f"Pattern: {pattern_id} | Threshold: {value:.2f} | No matches found")
             self.hide_loading()
-                        
+                
+                
     def detect_pattern_position(self, pattern_data):
-        """Pattern detection with dynamic threshold"""
+        """Pattern detection with correct scaling"""
         img_data = base64.b64decode(pattern_data['patch_image_encoded'])
         nparr = np.frombuffer(img_data, np.uint8)
         template = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -789,13 +810,17 @@ class PatchCutterGUI:
         frame_h, frame_w = frame_gray.shape[:2]
         template_h, template_w = template_gray.shape[:2]
         
+        # Calculate actual display scale and padding
+        scale = min(800/frame_w, 800/frame_h)
+        pad_y = (800 - int(frame_h * scale)) // 2
+        
         scales = np.linspace(0.5, 2.0, 20)
         matches = []
-        threshold = self.threshold_var.get()  # Get current threshold value
+        threshold = self.threshold_var.get()
         
-        for scale in scales:
-            scaled_w = int(template_w * scale)
-            scaled_h = int(template_h * scale)
+        for search_scale in scales:
+            scaled_w = int(template_w * search_scale)
+            scaled_h = int(template_h * search_scale)
             
             if scaled_w >= frame_w or scaled_h >= frame_h:
                 continue
@@ -810,12 +835,13 @@ class PatchCutterGUI:
                     'y': pt[1],
                     'width': scaled_w,
                     'height': scaled_h,
-                    'scale': scale,
+                    'scale': search_scale,
                     'confidence': result[pt[1], pt[0]]
                 })
         
         return self.filter_overlapping_matches(matches)
-
+                        
+  
     def filter_overlapping_matches(self, matches, overlap_thresh=0.3):
         """Filter overlapping pattern detections"""
         if not matches:
@@ -884,7 +910,7 @@ class PatchCutterGUI:
             self.pattern_list.delete(selection[0])
             
     def search_selected_pattern(self):
-        """Trigger pattern search on button click"""
+        """Search pattern with correct position adjustment"""
         selection = self.pattern_list.curselection()
         if not selection:
             self.update_status("Please select a pattern first")
@@ -893,6 +919,7 @@ class PatchCutterGUI:
         pattern_id = self.pattern_list.get(selection[0])
         pattern_file = os.path.join('data', 'patterns', f'{pattern_id}.json')
         self.show_loading()
+        
         try:
             with open(pattern_file, 'r') as f:
                 pattern_data = json.load(f)
@@ -902,12 +929,22 @@ class PatchCutterGUI:
                 self.detected_contours = []
                 self.original_contours = []
                 
+                # Calculate actual display scale and padding
+                img_h, img_w = self.original_frame.shape[:2]
+                scale = min(800/img_w, 800/img_h)
+                pad_y = (800 - int(img_h * scale)) // 2
+                
                 for position in positions:
                     contour_points = np.array(pattern_data['patch']['points'])
                     contour_points = contour_points * position['scale']
                     contour_points[:,:,0] += position['x']
                     contour_points[:,:,1] += position['y']
-                    scaled_contour = (contour_points * self.scale_factor).astype(np.int32)
+                    
+                    # Scale contour points and adjust for padding
+                    scaled_contour = (contour_points * scale).astype(np.int32)
+                    # Add padding only to y-coordinates
+                    scaled_contour[:,:,1] += pad_y
+                    
                     self.detected_contours.append(scaled_contour)
                     self.original_contours.append(scaled_contour.copy())
                 
@@ -921,6 +958,7 @@ class PatchCutterGUI:
             self.update_status(f"Search failed: {str(e)}")
         finally:
             self.hide_loading()
+
 
     def display_pattern(self, pattern_data):
         """Enhanced pattern display in the pattern preview window"""
@@ -1092,11 +1130,16 @@ class PatchCutterGUI:
         try:
             # Disable button before starting
             self.cut_button.config(state='disabled')
-            
+                        
+            # In your existing method, update the progress callback:
             def update_progress(current, total):
                 self.progress_label.config(text=f"Cutting: {current}/{total} patches")
+                if current == total:  # When cutting is complete
+                    self.total_cuts += total
+                    self.cuts_counter_label.config(text=f"Total Cuts: {self.total_cuts}")
+                    self.save_cuts_counter()
                 self.master.update()
-            
+                
             # Set progress callback
             self.cutter.progress_callback = update_progress
             
@@ -1269,6 +1312,24 @@ class PatchCutterGUI:
             print("Settings file not found or invalid. Using default settings.")
             # Define default settings
             return GALVO_SETTINGS_DEFAULT.copy()
+        
+    def load_cuts_counter(self):
+        try:
+            with open(self.cuts_file, 'r') as f:
+                self.total_cuts = int(f.read().strip())
+        except (FileNotFoundError, ValueError):
+            self.total_cuts = 0
+
+    def save_cuts_counter(self):
+        os.makedirs(os.path.dirname(self.cuts_file), exist_ok=True)
+        with open(self.cuts_file, 'w') as f:
+            f.write(str(self.total_cuts))
+
+    def reset_cuts_counter(self):
+        self.total_cuts = 0
+        self.save_cuts_counter()
+        self.cuts_counter_label.config(text=f"Total Cuts: {self.total_cuts}")
+
 
     # Update the toggle_offset_calibration method
     def toggle_offset_calibration(self, event=None):
@@ -1280,6 +1341,7 @@ class PatchCutterGUI:
           
     def exit_application(self):
         """Clean exit handling"""
+        self.save_cuts_counter()
         self._is_running = False
         
         # Cancel any pending timers

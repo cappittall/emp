@@ -426,18 +426,19 @@ class PatchCutter:
 
                     # Convert to galvo coordinates
                     px_hex, py_hex = self.pixel_to_galvo_coordinates(px_off, py_off)
-
+                    
+                    jump_delay = self.settings['jump_delay']
                     # Light command for cutting
-                    cmds.light(px_hex, py_hex, light=True)
+                    cmds.light(px_hex, py_hex, light=True, jump_delay = jump_delay)
 
             # Create and execute the cutting job
             job = self.sender.job(tick=tick)
             job.execute(1)
-            time.sleep(0.05)  # Small delay between patterns
+            time.sleep(0.500)  # Small delay between patterns
 
         # After all patterns are cut, move to a safe position
         self.send_to_top_left()
-        time.sleep(0.1)
+        time.sleep(0.5)
   
                 
     def cleanup(self):

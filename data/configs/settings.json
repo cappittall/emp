@@ -8,6 +8,7 @@
     "frequency": 109.22413793103449,
     "power": 51.293103448275865,
     "cut_speed": 10853.448275862069,
+    "jump_delay": 1000.0,
     "laser_on_delay": 0.8620689655172413,
     "laser_off_delay": 1.0,
     "polygon_delay": 50.0
