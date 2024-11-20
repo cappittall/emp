@@ -101,13 +101,14 @@ class PatchCutter:
 
     def _walk_galvo_boundary(self):
         while self.boundary_walking_event.is_set():
+            max_hex = self.settings['total_hex_distance']
             self.sender.set_xy(0, 0)
             time.sleep(0.01)
-            self.sender.set_xy(65535, 0)
+            self.sender.set_xy(max_hex, 0)
             time.sleep(0.01)
-            self.sender.set_xy(65535, 65535)
+            self.sender.set_xy(max_hex, max_hex)
             time.sleep(0.01)
-            self.sender.set_xy(0, 65535)
+            self.sender.set_xy(0, max_hex)
             time.sleep(0.01)            
 
     def analyze_background(self, bg_sample):

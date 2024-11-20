@@ -364,6 +364,10 @@ class PatchCutterGUI:
                                             fill='')
                 
     def update_camera_feed(self, mode='camera'):
+        """
+        Unified camera feed update function
+        mode: 'camera' or 'image'
+        """
         if self.mode == 'camera':
             if not hasattr(self, 'cap') or not self.cap.isOpened():
                 self.update_status("Camera not available")
@@ -374,50 +378,49 @@ class PatchCutterGUI:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             self.original_frame = frame.copy()
         elif self.mode == "image":
+            # Ensure the image is loaded
             if not hasattr(self, 'image_path') or not os.path.exists(self.image_path):
                 self.update_status("Image not loaded")
                 return
-            self.original_frame = cv2.imread(self.image_path)
-            frame = self.original_frame.copy()
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-        # Get frame dimensions
+            else:
+                # Load
+                self.original_frame = cv2.imread(self.image_path)
+                frame = self.original_frame.copy()
+                
+        # Get the dimensions of the frame
         h, w = frame.shape[:2]
-        
-        # Calculate scaling to fit 800x800 while maintaining aspect ratio
-        scale = min(800/w, 800/h)
-        
-        # Calculate new dimensions
-        new_w = int(w * scale)
-        new_h = int(h * scale)
-        
-        # Resize frame
-        frame_resized = cv2.resize(frame, (new_w, new_h))
-        
-        # Create black canvas of 800x800
-        canvas = np.zeros((800, 800, 3), dtype=np.uint8)
-        
-        # Calculate padding to center the image
-        pad_x = (800 - new_w) // 2
-        pad_y = (800 - new_h) // 2
-        
-        # Place resized image on canvas
-        canvas[pad_y:pad_y+new_h, pad_x:pad_x+new_w] = frame_resized
-        
-        self.current_image_rgb = canvas.copy()
+
+        # Calculate coordinates for cropping to a square
+        min_dim = min(h, w)
+        start_x = (w - min_dim) // 2
+        start_y = (h - min_dim) // 2
+        end_x = start_x + min_dim
+        end_y = start_y + min_dim
+
+        # Crop the frame to a square
+        frame_cropped = frame[start_y:end_y, start_x:end_x]
+
+        # Resize the cropped frame to 800x800
+        frame_resized = cv2.resize(frame_cropped, (800, 800), interpolation=cv2.INTER_LINEAR)
+        self.current_image_rgb = frame_resized.copy()
         
         # Convert and display
-        image = Image.fromarray(canvas)
+        image = Image.fromarray(frame_resized)
         photo = ImageTk.PhotoImage(image=image)
         self.camera_canvas.delete("all")
         self.camera_canvas.create_image(0, 0, image=photo, anchor='nw')
         self.camera_canvas._photo = photo
-
+        
+        # Replace the settings check with a one-time update
+        if self.cutter.settings_changed:
+            self.update_gui_settings()
+            # Draw detected patterns if they exist
         if self.show_detected_pattern:
             self.draw_detected_patterns()
             
         # Schedule next update
         self.master.after(30, lambda: self.update_camera_feed(mode))
+
 
     def update_gui_settings(self):
         """Update GUI sliders without triggering additional changes"""
