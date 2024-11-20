@@ -338,7 +338,7 @@ class PatchCutterGUI:
         self.original_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))        
         # Set canvas size
         self.canvas_width = 800
-        self.canvas_height = 800
+        self.canvas_height = 600
         self.camera_canvas.config(width=self.canvas_width, height=self.canvas_height)        
         # Calculate scaling factors
         self.scale_factor = min(self.canvas_width/self.original_width, 
@@ -385,7 +385,7 @@ class PatchCutterGUI:
         h, w = frame.shape[:2]
         
         # Calculate scaling to fit 800x800 while maintaining aspect ratio
-        scale = min(800/w, 800/h)
+        scale = min(800/w, 600/h)
         
         # Calculate new dimensions
         new_w = int(w * scale)
@@ -395,11 +395,11 @@ class PatchCutterGUI:
         frame_resized = cv2.resize(frame, (new_w, new_h))
         
         # Create black canvas of 800x800
-        canvas = np.zeros((800, 800, 3), dtype=np.uint8)
+        canvas = np.zeros((800, 600, 3), dtype=np.uint8)
         
         # Calculate padding to center the image
         pad_x = (800 - new_w) // 2
-        pad_y = (800 - new_h) // 2
+        pad_y = (600 - new_h) // 2
         
         # Place resized image on canvas
         canvas[pad_y:pad_y+new_h, pad_x:pad_x+new_w] = frame_resized
@@ -670,8 +670,8 @@ class PatchCutterGUI:
                 
     def on_selection_end(self, event):
         if self.selecting and self.start_point:
-            #x1, y1, x2, y2 = self.get_scaled_coordinates800_600(event)
-            x1, y1, x2, y2 = self.get_scaled_coordinates800_800(event)
+            x1, y1, x2, y2 = self.get_scaled_coordinates800_600(event)
+            #x1, y1, x2, y2 = self.get_scaled_coordinates800_800(event)
             
             bg_sample = self.original_frame[y1:y1+10, x1:x1+10]
             patch_region = self.original_frame[y1:y2, x1:x2]
