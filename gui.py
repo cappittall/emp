@@ -338,7 +338,7 @@ class PatchCutterGUI:
         self.original_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))        
         # Set canvas size
         self.canvas_width = 800
-        self.canvas_height = 600
+        self.canvas_height = 800
         self.camera_canvas.config(width=self.canvas_width, height=self.canvas_height)        
         # Calculate scaling factors
         self.scale_factor = min(self.canvas_width/self.original_width, 
@@ -385,7 +385,7 @@ class PatchCutterGUI:
         h, w = frame.shape[:2]
         
         # Calculate scaling to fit 800x800 while maintaining aspect ratio
-        scale = min(800/w, 600/h)
+        scale = min(800/w, 800/h)
         
         # Calculate new dimensions
         new_w = int(w * scale)
@@ -395,11 +395,11 @@ class PatchCutterGUI:
         frame_resized = cv2.resize(frame, (new_w, new_h))
         
         # Create black canvas of 800x800
-        canvas = np.zeros((800, 600, 3), dtype=np.uint8)
+        canvas = np.zeros((800, 800, 3), dtype=np.uint8)
         
         # Calculate padding to center the image
         pad_x = (800 - new_w) // 2
-        pad_y = (600 - new_h) // 2
+        pad_y = (800 - new_h) // 2
         
         # Place resized image on canvas
         canvas[pad_y:pad_y+new_h, pad_x:pad_x+new_w] = frame_resized
@@ -670,8 +670,8 @@ class PatchCutterGUI:
                 
     def on_selection_end(self, event):
         if self.selecting and self.start_point:
-            x1, y1, x2, y2 = self.get_scaled_coordinates800_600(event)
-            #x1, y1, x2, y2 = self.get_scaled_coordinates800_800(event)
+            #x1, y1, x2, y2 = self.get_scaled_coordinates800_600(event)
+            x1, y1, x2, y2 = self.get_scaled_coordinates(event)
             
             bg_sample = self.original_frame[y1:y1+10, x1:x1+10]
             patch_region = self.original_frame[y1:y2, x1:x2]
@@ -931,6 +931,12 @@ class PatchCutterGUI:
         canvas_width = self.pattern_canvas.winfo_width()
         canvas_height = self.pattern_canvas.winfo_height()
         
+        # Store current display parameters
+        img_h, img_w = self.original_frame.shape[:2]
+        self.current_scale = min(800/img_w, 800/img_h)
+        self.current_pad_x = (800 - int(img_w * self.current_scale)) // 2
+        self.current_pad_y = (800 - int(img_h * self.current_scale)) // 2
+        
         # Use patch_image directly from pattern_data
         patch_image = pattern_data.get('patch_image')
         
@@ -953,14 +959,19 @@ class PatchCutterGUI:
             # Draw contour overlay if available
             if 'points' in pattern_data.get('patch', {}):
                 contour_points = np.array(pattern_data['patch']['points'])
+                
                 # Scale contour points to match displayed image size
                 scale_x = image.width / patch_image.shape[1]
                 scale_y = image.height / patch_image.shape[0]
+                
+                # Apply current display scaling
                 scaled_points = contour_points * [scale_x, scale_y]
                 scaled_points = scaled_points.reshape((-1, 2))
                 
-                # Draw contour as polygon
+                # Apply padding and create final points list
                 points = [(x + int(p[0]), y + int(p[1])) for p in scaled_points]
+                
+                # Draw contour as polygon with enhanced visibility
                 self.pattern_canvas.create_polygon(points, outline='green', width=2, fill='')
 
     def rename_pattern(self):
@@ -1170,30 +1181,37 @@ class PatchCutterGUI:
         
         return x1, y1, x2, y2
     
-    def get_scaled_coordinates800_800(self, event):
-        """Convert canvas coordinates to original image coordinates with proper scaling"""
-        # Get original image dimensions
+    def get_scaled_coordinates(self, event):
+        """Convert canvas coordinates to original image coordinates with exact scaling"""
+        # Get original frame dimensions
         img_h, img_w = self.original_frame.shape[:2]
         
-        # Get canvas dimensions
-        canvas_w = self.canvas_width  # 800
-        canvas_h = self.canvas_height # 800
-
-        # Calculate scaling factors
-        scale = min(canvas_w/img_w, canvas_h/img_h)
+        # Calculate scaling to fit 800x800
+        scale = min(800/img_w, 800/img_h)
         
-        # Calculate padding to center the image
-        pad_x = (canvas_w - img_w * scale) // 2
-        pad_y = (canvas_h - img_h * scale) // 2
+        # Calculate padding for centered image
+        pad_x = (800 - int(img_w * scale)) // 2
+        pad_y = (800 - int(img_h * scale)) // 2
         
-        # Adjust coordinates for padding and scale
-        x1 = max(0, min((min(self.start_point[0], event.x) - pad_x) / scale, img_w))
-        y1 = max(0, min((min(self.start_point[1], event.y) - pad_y) / scale, img_h))
-        x2 = max(0, min((max(self.start_point[0], event.x) - pad_x) / scale, img_w))
-        y2 = max(0, min((max(self.start_point[1], event.y) - pad_y) / scale, img_h))
+        # Convert canvas coordinates to image coordinates
+        canvas_x1 = min(self.start_point[0], event.x) - pad_x
+        canvas_y1 = min(self.start_point[1], event.y) - pad_y
+        canvas_x2 = max(self.start_point[0], event.x) - pad_x
+        canvas_y2 = max(self.start_point[1], event.y) - pad_y
         
-        return int(x1), int(y1), int(x2), int(y2)
-
+        # Scale back to original image coordinates
+        x1 = int(canvas_x1 / scale)
+        y1 = int(canvas_y1 / scale)
+        x2 = int(canvas_x2 / scale)
+        y2 = int(canvas_y2 / scale)
+        
+        # Ensure coordinates are within image bounds
+        x1 = max(0, min(x1, img_w))
+        y1 = max(0, min(y1, img_h))
+        x2 = max(0, min(x2, img_w))
+        y2 = max(0, min(y2, img_h))
+        
+        return x1, y1, x2, y2
     
     def draw_calibration_target(self, canvas):
         """Draw a dart target style calibration marker at true (0,0)"""
