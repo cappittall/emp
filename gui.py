@@ -53,6 +53,7 @@ class PatchCutterGUI:
             
         self._is_running = True
         self.calibration_mode = False
+        self.calibration_active = False
 
         self.selecting = False
         self.start_point = None
@@ -436,7 +437,7 @@ class PatchCutterGUI:
         if self.show_detected_pattern:
             self.draw_detected_patterns()
             
-        if self.calibration_mode or self.calibration_active:
+        if self.calibration_mode :
             self.draw_calibration_target(self.camera_canvas)
             self.update_gui_settings()
             
@@ -555,6 +556,7 @@ class PatchCutterGUI:
             self.calibration_active = False
             
         self.calibration_active = not self.calibration_active
+        self.calibration_mode = not self.calibration_mode
         
         if self.calibration_active:
             self.calibrate_button.config(text="Stop Caib.")
