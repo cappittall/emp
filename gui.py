@@ -905,6 +905,10 @@ class PatchCutterGUI:
             self.pattern_list.delete(selection[0])
             
     def search_selected_pattern(self):
+            # Reset offset value to 0
+        self.offset_var.set(0.0)
+        self.offset_value_label.config(text="0.0")
+        self.update_status("Searching...")
         """Search pattern with correct position adjustment"""
         selection = self.pattern_list.curselection()
         if not selection:
