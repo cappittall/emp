@@ -101,17 +101,21 @@ class PatchCutter:
 
     def _walk_galvo_boundary(self, event):
         while self.boundary_walking_event.is_set():
-            max_val = self.settings['total_hex_distance'] if event=='l' else self.settings['total_cm_distance']
-            print(f'max_val: {max_val}')
-            max_hex = max_val if event=='l' else max_val * self.hex_steps_per_cm # max cm * hex steps per cm
-            self.sender.set_xy(0, 0)
-            time.sleep(0.01)
-            self.sender.set_xy(max_hex, 0)
-            time.sleep(0.01)
-            self.sender.set_xy(max_hex, max_hex)
-            time.sleep(0.01)
-            self.sender.set_xy(0, max_hex)
-            time.sleep(0.01)            
+            try:
+                max_val = self.settings['total_hex_distance'] if event=='l' else self.settings['total_cm_distance']
+                max_hex = max_val if event=='l' else max_val * self.hex_steps_per_cm
+                
+                points = [(0,0), (max_hex,0), (max_hex,max_hex), (0,max_hex)]
+                
+                for x,y in points:
+                    if not self.boundary_walking_event.is_set():
+                        break
+                    self.sender.set_xy(x, y)
+                    time.sleep(0.01)
+                    
+            except Exception as e:
+                logging.error(f"Error during boundary walking: {e}")
+                break      
 
     def analyze_background(self, bg_sample):
         """Enhanced background analysis for various colors"""

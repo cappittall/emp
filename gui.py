@@ -436,8 +436,10 @@ class PatchCutterGUI:
         if self.show_detected_pattern:
             self.draw_detected_patterns()
             
-        if self.calibration_mode:
+        if self.calibration_mode or self.calibration_active:
             self.draw_calibration_target(self.camera_canvas)
+            self.update_gui_settings()
+            
             
         # Schedule next update
         self.master.after(30, lambda: self.update_camera_feed(mode))
@@ -1280,9 +1282,12 @@ class PatchCutterGUI:
         if hasattr(self.cutter, 'boundary_walking_event'):
             if self.cutter.boundary_walking_event.is_set():
                 self.cutter.stop_walk_galvo_boundary(event)
+                 # Add visual indicator
+                self.camera_canvas.config(bg='black')
                 self.update_status("Boundary walking stopped.")
             else:
                 self.cutter.start_walk_galvo_boundary(event)
+                self.camera_canvas.config(bg='light yellow')
                 self.update_status("Boundary walking started.")
 
             
