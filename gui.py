@@ -72,9 +72,9 @@ class PatchCutterGUI:
         # Initialize camera in GUI only
         self.video_source = video_source
         self.mode = "camera" # image, camera
-        self.image_path = 'data/img/ar0.png'
+        self.image_path = 'data/img/im4.jpg'
         self.init_camera()
-        self.update_camera_feed()
+        self.update_camera_feed(mode='image')
         self.current_image_rgb = None            
         self.update_pattern_list()
         
@@ -340,37 +340,8 @@ class PatchCutterGUI:
         self.progress_frame.pack(fill=tk.X, padx=5, pady=2)
               
         self.update_connection_status()
-            
-    def init_camera(self):
-        # Try different camera indices
-        for cam_index in range(2):  # Try camera 0 and 1
-            self.cap = cv2.VideoCapture(cam_index)
-            if self.cap.isOpened():
-                # Camera successfully opened
-                self.video_source = cam_index
-                break
-        
-        if not self.cap.isOpened():
-            self.update_status("No camera found. Using fallback mode.")
-            return False        
-        # Get actual dimensions (may differ from requested)
-        self.original_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        self.original_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))        
-        # Set canvas size
-        self.canvas_width = 800
-        self.canvas_height = 800
-        self.camera_canvas.config(width=self.canvas_width, height=self.canvas_height)        
-        # Calculate scaling factors
-        self.scale_factor = min(self.canvas_width/self.original_width, 
-                            self.canvas_height/self.original_height)        
-        # Calculate display dimensions
-        self.display_width = int(self.original_width * self.scale_factor)
-        self.display_height = int(self.original_height * self.scale_factor)        
-        # Calculate padding
-        self.pad_x = (self.canvas_width - self.display_width) // 2
-        self.pad_y = (self.canvas_height - self.display_height) // 2
-        return True
-    
+   
+
     def draw_detected_patterns(self):
         """Draw detected patterns on camera canvas"""
         if hasattr(self, 'detected_contours') and self.detected_contours and self.show_detected_pattern:
@@ -384,8 +355,37 @@ class PatchCutterGUI:
                                             fill='')
                 
                 
+                
+    def init_camera(self):
+        # Try different camera indices
+        for cam_index in range(2):
+            self.cap = cv2.VideoCapture(cam_index)
+            if self.cap.isOpened():
+                self.video_source = cam_index
+                break
+        
+        if not self.cap.isOpened():
+            self.update_status("No camera found. Using fallback mode.")
+            return False
+            
+        # Get actual camera dimensions
+        self.original_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.original_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        # Set fixed canvas size
+        self.canvas_width = 800
+        self.canvas_height = 800
+        self.camera_canvas.config(width=self.canvas_width, height=self.canvas_height)
+        
+        # Calculate scaling factor based on width
+        self.scale_factor = self.canvas_width / self.original_width
+                        
+        return True
+        
     def update_camera_feed(self, mode='camera'):
-        if self.mode == 'camera':
+        mode = self.mode
+        # Get frame based on mode
+        if mode == 'camera':
             if not hasattr(self, 'cap') or not self.cap.isOpened():
                 self.update_status("Camera not available")
                 return
@@ -394,7 +394,7 @@ class PatchCutterGUI:
                 return
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             self.original_frame = frame.copy()
-        elif self.mode == "image":
+        elif mode == "image":
             if not hasattr(self, 'image_path') or not os.path.exists(self.image_path):
                 self.update_status("Image not loaded")
                 return
@@ -402,33 +402,23 @@ class PatchCutterGUI:
             frame = self.original_frame.copy()
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # Get frame dimensions
         h, w = frame.shape[:2]
         
-        # Calculate scaling to fit exactly in 800x800
-        scale = min(800/w, 800/h)
-        
-        # Calculate new dimensions
+        # Scale up to ensure minimum 800px width or height
+        scale = max(800/w, 800/h)
         new_w = int(w * scale)
         new_h = int(h * scale)
-        
-        # Resize frame
         frame_resized = cv2.resize(frame, (new_w, new_h))
         
-        # Create black canvas of 800x800
-        canvas = np.zeros((800, 800, 3), dtype=np.uint8)
-        
-        # Calculate padding to center the image
-        pad_x = (800 - new_w) // 2
-        pad_y = (800 - new_h) // 2
-        
-        # Place resized image on canvas
-        canvas[pad_y:pad_y+new_h, pad_x:pad_x+new_w] = frame_resized
-        
-        self.current_image_rgb = canvas.copy()
+        # Crop to 800x800 from center
+        start_x = (new_w - 800) // 2
+        start_y = (new_h - 800) // 2
+        frame_resized = frame_resized[start_y:start_y+800, start_x:start_x+800]
+        print(frame_resized.shape)
+        self.current_image_rgb = frame_resized.copy()
         
         # Convert and display
-        image = Image.fromarray(canvas)
+        image = Image.fromarray(frame_resized)
         photo = ImageTk.PhotoImage(image=image)
         self.camera_canvas.delete("all")
         self.camera_canvas.create_image(0, 0, image=photo, anchor='nw')
@@ -437,10 +427,9 @@ class PatchCutterGUI:
         if self.show_detected_pattern:
             self.draw_detected_patterns()
             
-        if self.calibration_mode :
+        if self.calibration_mode:
             self.draw_calibration_target(self.camera_canvas)
             self.update_gui_settings()
-            
             
         # Schedule next update
         self.master.after(30, lambda: self.update_camera_feed(mode))
@@ -698,7 +687,6 @@ class PatchCutterGUI:
                 
     def on_selection_end(self, event):
         if self.selecting and self.start_point:
-            #x1, y1, x2, y2 = self.get_scaled_coordinates800_600(event)
             x1, y1, x2, y2 = self.get_scaled_coordinates(event)
             
             bg_sample = self.original_frame[y1:y1+10, x1:x1+10]
@@ -716,8 +704,7 @@ class PatchCutterGUI:
                 'patch': self.cutter.extract_contour(patch_region, bg_analysis),
                 'patch_image': patch_region.copy()
             }
-            
-            # Now display_pattern will have access to pattern_id
+
             self.display_pattern(pattern_data)
             
             contour_points = np.array(pattern_data['patch']['points'])
@@ -969,19 +956,13 @@ class PatchCutterGUI:
 
 
     def display_pattern(self, pattern_data):
-        """Enhanced pattern display in the pattern preview window"""
+        """Enhanced pattern display with proper sizing"""
         # Clear existing content
         self.pattern_canvas.delete("all")
         
         # Get canvas dimensions
         canvas_width = self.pattern_canvas.winfo_width()
         canvas_height = self.pattern_canvas.winfo_height()
-        
-        # Store current display parameters
-        img_h, img_w = self.original_frame.shape[:2]
-        self.current_scale = min(800/img_w, 800/img_h)
-        self.current_pad_x = (800 - int(img_w * self.current_scale)) // 2
-        self.current_pad_y = (800 - int(img_h * self.current_scale)) // 2
         
         # Use patch_image directly from pattern_data
         patch_image = pattern_data.get('patch_image')
@@ -990,34 +971,38 @@ class PatchCutterGUI:
             # Convert numpy array to PIL Image
             image = Image.fromarray(patch_image)
             
-            # Resize to fit canvas while maintaining aspect ratio
-            image = self.resize_image_to_canvas(image, canvas_width, canvas_height)
+            # Calculate scaling to fit the canvas while maintaining aspect ratio
+            img_w, img_h = image.size
+            scale = min(canvas_width/img_w, canvas_height/img_h)
+            new_size = (int(img_w * scale), int(img_h * scale))
+            
+            # Resize image to fit canvas
+            image = image.resize(new_size, Image.Resampling.LANCZOS)
             photo = ImageTk.PhotoImage(image)
             
             # Calculate centering position
-            x = (canvas_width - image.width) // 2
-            y = (canvas_height - image.height) // 2
+            x = (canvas_width - new_size[0]) // 2
+            y = (canvas_height - new_size[1]) // 2
             
             # Display image
             self.pattern_canvas.create_image(x, y, image=photo, anchor=tk.NW)
-            self.pattern_canvas._photo = photo  # Keep reference
+            self.pattern_canvas._photo = photo
             
             # Draw contour overlay if available
             if 'points' in pattern_data.get('patch', {}):
                 contour_points = np.array(pattern_data['patch']['points'])
                 
                 # Scale contour points to match displayed image size
-                scale_x = image.width / patch_image.shape[1]
-                scale_y = image.height / patch_image.shape[0]
+                scale_x = new_size[0] / patch_image.shape[1]
+                scale_y = new_size[1] / patch_image.shape[0]
                 
-                # Apply current display scaling
                 scaled_points = contour_points * [scale_x, scale_y]
                 scaled_points = scaled_points.reshape((-1, 2))
                 
-                # Apply padding and create final points list
+                # Apply centering offset and create final points list
                 points = [(x + int(p[0]), y + int(p[1])) for p in scaled_points]
                 
-                # Draw contour as polygon with enhanced visibility
+                # Draw contour as polygon
                 self.pattern_canvas.create_polygon(points, outline='green', width=2, fill='')
 
     def rename_pattern(self):
@@ -1188,46 +1173,26 @@ class PatchCutterGUI:
 
     def generate_masks(self):
         pass
-
-    def resize_image_to_canvas(self, image, canvas_width, canvas_height):
-        img_width, img_height = image.size
-        scale = min(canvas_width/img_width, canvas_height/img_height)
-        new_size = (int(img_width * scale), int(img_height * scale))
-        # Use LANCZOS instead of deprecated ANTIALIAS
-        return image.resize(new_size, Image.Resampling.LANCZOS)  
-
-    def show_frame_on_canvas(self, frame, canvas):
-        if frame is None:
-            return
-        
-        # Convert directly to PhotoImage since frame is already in RGB
-        image = Image.fromarray(frame)
-        photo = ImageTk.PhotoImage(image)
-        
-        # Clear previous image
-        canvas.delete("all")
-        
-        # Draw new image
-        canvas.create_image(self.pad_x, self.pad_y, image=photo, anchor=tk.NW)
-        canvas._photo = photo
     
     def get_scaled_coordinates(self, event):
-        """Convert canvas coordinates to original image coordinates with exact scaling"""
+        """Convert canvas coordinates to original image coordinates with new scaling"""
         # Get original frame dimensions
         img_h, img_w = self.original_frame.shape[:2]
         
-        # Calculate scaling to fit 800x800
-        scale = min(800/img_w, 800/img_h)
+        # Calculate scaling used in update_camera_feed
+        scale = max(800/img_w, 800/img_h)
+        new_w = int(img_w * scale)
+        new_h = int(img_h * scale)
         
-        # Calculate padding for centered image
-        pad_x = (800 - int(img_w * scale)) // 2
-        pad_y = (800 - int(img_h * scale)) // 2
+        # Calculate crop offsets used in update_camera_feed
+        start_x = (new_w - 800) // 2
+        start_y = (new_h - 800) // 2
         
-        # Convert canvas coordinates to image coordinates
-        canvas_x1 = min(self.start_point[0], event.x) - pad_x
-        canvas_y1 = min(self.start_point[1], event.y) - pad_y
-        canvas_x2 = max(self.start_point[0], event.x) - pad_x
-        canvas_y2 = max(self.start_point[1], event.y) - pad_y
+        # Convert canvas coordinates to scaled image coordinates
+        canvas_x1 = min(self.start_point[0], event.x) + start_x
+        canvas_y1 = min(self.start_point[1], event.y) + start_y
+        canvas_x2 = max(self.start_point[0], event.x) + start_x
+        canvas_y2 = max(self.start_point[1], event.y) + start_y
         
         # Scale back to original image coordinates
         x1 = int(canvas_x1 / scale)
@@ -1235,7 +1200,7 @@ class PatchCutterGUI:
         x2 = int(canvas_x2 / scale)
         y2 = int(canvas_y2 / scale)
         
-        # Ensure coordinates are within image bounds
+        # Ensure coordinates are within bounds
         x1 = max(0, min(x1, img_w))
         y1 = max(0, min(y1, img_h))
         x2 = max(0, min(x2, img_w))
@@ -1249,8 +1214,8 @@ class PatchCutterGUI:
         radius = min(self.canvas_width, self.canvas_height) * 0.1
         
         # Position at true (0,0)
-        target_x = self.pad_x
-        target_y = self.pad_y
+        target_x = 1
+        target_y = 1
 
         # Draw quarter circles flowing northwest to southeast
         for i in range(3):

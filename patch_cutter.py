@@ -297,6 +297,9 @@ class PatchCutter:
             threading.Thread(target=self.save_settings).start()
             
     def pixel_to_galvo_coordinates(self, x, y):
+        # apply galvo offset
+        x += self.settings['galvo_offset_x']
+        y += self.settings['galvo_offset_y']
         # Convert pixel to cm
         cm_x = x / self.settings['pixel_cm_ratio']
         cm_y = y / self.settings['pixel_cm_ratio']
@@ -406,12 +409,8 @@ class PatchCutter:
             start_point = contour[0][0]
             x, y = start_point
 
-            # Apply galvo offsets
-            x_off = x + self.settings['galvo_offset_x']
-            y_off = y + self.settings['galvo_offset_y']
-
             # Convert to galvo coordinates
-            x_hex, y_hex = self.pixel_to_galvo_coordinates(x_off, y_off)
+            x_hex, y_hex = self.pixel_to_galvo_coordinates(x, y)
 
             # Move to the starting position
             self.sender.set_xy(x_hex, y_hex)
@@ -425,13 +424,9 @@ class PatchCutter:
                 # Begin cutting the contour
                 for point in contour:
                     px, py = point[0]
-
-                    # Apply galvo offsets
-                    px_off = px + self.settings['galvo_offset_x']
-                    py_off = py + self.settings['galvo_offset_y']
-
+                    
                     # Convert to galvo coordinates
-                    px_hex, py_hex = self.pixel_to_galvo_coordinates(px_off, py_off)
+                    px_hex, py_hex = self.pixel_to_galvo_coordinates(px, py)
                     
                     jump_delay = self.settings['jump_delay']
                     # Light command for cutting
