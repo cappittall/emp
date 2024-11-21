@@ -572,7 +572,9 @@ class PatchCutterGUI:
             current_point = contour[self.preview_point_index][0]
             x, y = current_point
             
-            x_hex, y_hex = self.cutter.pixel_to_galvo_coordinates(x, y)
+            x_off = x + self.cutter.settings['galvo_offset_x']
+            y_off = y + self.cutter.settings['galvo_offset_y']
+            x_hex, y_hex = self.cutter.pixel_to_galvo_coordinates(x_off, y_off)
             
             if self.cutter.galvo_connection:
                 self.cutter.sender.set_xy(x_hex, y_hex)
