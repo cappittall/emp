@@ -414,7 +414,6 @@ class PatchCutterGUI:
         start_x = (new_w - 800) // 2
         start_y = (new_h - 800) // 2
         frame_resized = frame_resized[start_y:start_y+800, start_x:start_x+800]
-        print(frame_resized.shape)
         self.current_image_rgb = frame_resized.copy()
         
         # Convert and display
@@ -924,10 +923,15 @@ class PatchCutterGUI:
                 self.detected_contours = []
                 self.original_contours = []
                 
-                # Calculate actual display scale and padding
+                 
                 img_h, img_w = self.original_frame.shape[:2]
-                scale = min(800/img_w, 800/img_h)
-                pad_y = (800 - int(img_h * scale)) // 2
+                scale = max(800/img_w, 800/img_h)
+                new_w = int(img_w * scale)
+                new_h = int(img_h * scale)
+                
+                # Calculate the same offsets as in update_camera_feed
+                start_x = (new_w - 800) // 2
+                start_y = (new_h - 800) // 2
                 
                 for position in positions:
                     contour_points = np.array(pattern_data['patch']['points'])
@@ -935,10 +939,10 @@ class PatchCutterGUI:
                     contour_points[:,:,0] += position['x']
                     contour_points[:,:,1] += position['y']
                     
-                    # Scale contour points and adjust for padding
+                    # Apply display scale and offset correction
                     scaled_contour = (contour_points * scale).astype(np.int32)
-                    # Add padding only to y-coordinates
-                    scaled_contour[:,:,1] += pad_y
+                    scaled_contour[:,:,0] -= start_x
+                    scaled_contour[:,:,1] -= start_y
                     
                     self.detected_contours.append(scaled_contour)
                     self.original_contours.append(scaled_contour.copy())
