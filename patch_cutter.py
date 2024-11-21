@@ -102,7 +102,8 @@ class PatchCutter:
     def _walk_galvo_boundary(self, event):
         while self.boundary_walking_event.is_set():
             max_val = self.settings['total_hex_distance'] if event=='l' else self.settings['total_cm_distance']
-            max_hex, _ = (max_val, 0 ) if event=='l' else max_val * self.hex_steps_per_cm # max cm * hex steps per cm
+            print(f'max_val: {max_val}')
+            max_hex = max_val if event=='l' else max_val * self.hex_steps_per_cm # max cm * hex steps per cm
             self.sender.set_xy(0, 0)
             time.sleep(0.01)
             self.sender.set_xy(max_hex, 0)
