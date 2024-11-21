@@ -435,6 +435,9 @@ class PatchCutterGUI:
         if self.show_detected_pattern:
             self.draw_detected_patterns()
             
+        if self.calibration_mode:
+            self.draw_calibration_target(self.camera_canvas)
+            
         # Schedule next update
         self.master.after(30, lambda: self.update_camera_feed(mode))
 
@@ -1202,27 +1205,6 @@ class PatchCutterGUI:
         # Draw new image
         canvas.create_image(self.pad_x, self.pad_y, image=photo, anchor=tk.NW)
         canvas._photo = photo
-
-    def get_scaled_coordinates_800_600(self, event):
-        # Adjust for image position on canvas
-        canvas_x1 = min(self.start_point[0], event.x) - self.pad_x
-        canvas_y1 = min(self.start_point[1], event.y) - self.pad_y
-        canvas_x2 = max(self.start_point[0], event.x) - self.pad_x
-        canvas_y2 = max(self.start_point[1], event.y) - self.pad_y
-        
-        # Convert to original image coordinates
-        x1 = int(canvas_x1 / self.scale_factor)
-        y1 = int(canvas_y1 / self.scale_factor)
-        x2 = int(canvas_x2 / self.scale_factor)
-        y2 = int(canvas_y2 / self.scale_factor)
-        
-        # Ensure coordinates are within bounds
-        x1 = max(0, min(x1, self.original_width))
-        y1 = max(0, min(y1, self.original_height))
-        x2 = max(0, min(x2, self.original_width))
-        y2 = max(0, min(y2, self.original_height))
-        
-        return x1, y1, x2, y2
     
     def get_scaled_coordinates(self, event):
         """Convert canvas coordinates to original image coordinates with exact scaling"""
@@ -1334,8 +1316,8 @@ class PatchCutterGUI:
     # Update the toggle_offset_calibration method
     def toggle_offset_calibration(self, event=None):
         self.calibration_mode = not self.calibration_mode
-        status = "ON" if self.calibration_mode else "OFF"
-        self.update_status(f"Calibration Mode ON {status}")            
+        status = "ON" if self.calibration_mode else "OFF"            
+        self.update_status(f"Calibration Mode : {status}")            
         if self.cutter:
             self.cutter.toggle_calibration_mode()
           
