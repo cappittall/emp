@@ -425,8 +425,8 @@ class PatchCutter:
                 for point in contour:
                     px, py = point[0]
                     
-                    px += px + self.settings['galvo_offset_x']
-                    py += py + self.settings['galvo_offset_y']
+                    px += self.settings['galvo_offset_x']
+                    py += self.settings['galvo_offset_y']
                     # Convert to galvo coordinates
                     px_hex, py_hex = self.pixel_to_galvo_coordinates(px, py)
                     
