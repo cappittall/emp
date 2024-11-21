@@ -556,6 +556,7 @@ class PatchCutterGUI:
         else:
             self.calibrate_button.config(text="ArUco Manual")
             self.cutter.save_settings()
+            self.cutter.send_to_top_left()
             # Stop laser preview
             if hasattr(self, 'preview_timer'):
                 self.master.after_cancel(self.preview_timer)
