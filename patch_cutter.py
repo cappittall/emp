@@ -87,21 +87,22 @@ class PatchCutter:
         self.bg_lower = np.array(bg_analysis['range']['lower'])
         self.bg_upper = np.array(bg_analysis['range']['upper'])
             
-    def start_walk_galvo_boundary(self):
+    def start_walk_galvo_boundary(self, event):
         if self.sender and (self.boundary_walking_thread is None or not self.boundary_walking_thread.is_alive()):
             self.boundary_walking_event.set()
-            self.boundary_walking_thread = threading.Thread(target=self._walk_galvo_boundary)
+            self.boundary_walking_thread = threading.Thread(target=self._walk_galvo_boundary, args=(event,))
             self.boundary_walking_thread.start()
 
-    def stop_walk_galvo_boundary(self):
+    def stop_walk_galvo_boundary(self, event):
         self.boundary_walking_event.clear()
         if self.boundary_walking_thread and self.boundary_walking_thread.is_alive():
             self.boundary_walking_thread.join()
             self.boundary_walking_thread = None
 
-    def _walk_galvo_boundary(self):
+    def _walk_galvo_boundary(self, event):
         while self.boundary_walking_event.is_set():
-            max_hex = self.settings['total_hex_distance']
+            max_val = self.settings['total_hex_distance'] if event=='l' else self.settings['total_cm_distance']
+            max_hex, _ = (max_val, 0 ) if event=='l' else max_val * self.hex_steps_per_cm # max cm * hex steps per cm
             self.sender.set_xy(0, 0)
             time.sleep(0.01)
             self.sender.set_xy(max_hex, 0)

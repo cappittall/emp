@@ -238,7 +238,8 @@ class PatchCutterGUI:
         self.master.bind('<s>', lambda event: self.adjust_galvo_offset(0, 1))
         self.master.bind('<a>', lambda event: self.adjust_galvo_offset(-1, 0))
         self.master.bind('<d>', lambda event: self.adjust_galvo_offset(1, 0)) 
-        self.master.bind('<l>', self.walk_galvo_boundary)  
+        self.master.bind('<l>', lambda event: self.walk_galvo_boundary('l'))  
+        self.master.bind('<k>', lambda event: self.walk_galvo_boundary('k'))  
 
     def create_galvo_controls(self, parent):
         slider_frame = ttk.LabelFrame(parent, text="Galvo Settings")
@@ -1278,10 +1279,10 @@ class PatchCutterGUI:
     def walk_galvo_boundary(self, event=None):
         if hasattr(self.cutter, 'boundary_walking_event'):
             if self.cutter.boundary_walking_event.is_set():
-                self.cutter.stop_walk_galvo_boundary()
+                self.cutter.stop_walk_galvo_boundary(event)
                 self.update_status("Boundary walking stopped.")
             else:
-                self.cutter.start_walk_galvo_boundary()
+                self.cutter.start_walk_galvo_boundary(event)
                 self.update_status("Boundary walking started.")
 
             
